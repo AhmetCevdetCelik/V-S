@@ -33,6 +33,7 @@ HDRS := $(INC_DIR)/vis_jitter.hpp \
 TARGET := vis-jitter
 TEST_SMI := test_smi_audit
 TEST_HIST := test_histogram
+TEST_REPORT := test_report_json
 
 # ---------------------------------------------------------------------------
 # Default target
@@ -46,12 +47,17 @@ $(TARGET): $(SRCS) $(HDRS)
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-# Run test_histogram first (no privileges needed),
-# then test_smi_audit (requires root for MSR access).
+# Run rootless tests first, then test_smi_audit (requires root for MSR access).
 # Order matters: if the basic logic fails, don't bother with root.
-test: $(TEST_SMI) $(TEST_HIST)
+test: $(TEST_HIST) $(TEST_REPORT)
 	@echo "Running test_histogram..."
 	./$(TEST_HIST)
+	@echo ""
+	@echo "Running test_report_json..."
+	./$(TEST_REPORT)
+	@echo ""
+	@echo "Building test_smi_audit (requires libnuma)..."
+	$(MAKE) $(TEST_SMI)
 	@echo ""
 	@echo "Running test_smi_audit (requires root)..."
 	sudo ./$(TEST_SMI)
@@ -62,12 +68,15 @@ $(TEST_SMI): $(TEST_DIR)/test_smi_audit.cpp $(SRC_DIR)/smi_audit.cpp $(INC_DIR)/
 $(TEST_HIST): $(TEST_DIR)/test_histogram.cpp $(SRC_DIR)/histogram.cpp $(INC_DIR)/histogram.hpp $(INC_DIR)/vis_jitter.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_DIR)/test_histogram.cpp $(SRC_DIR)/histogram.cpp
 
+$(TEST_REPORT): $(TEST_DIR)/test_report_json.cpp $(SRC_DIR)/report.cpp $(INC_DIR)/report.hpp $(INC_DIR)/vis_jitter.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $(TEST_DIR)/test_report_json.cpp $(SRC_DIR)/report.cpp
+
 # ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
 
 clean:
-	rm -f $(TARGET) $(TEST_SMI) $(TEST_HIST)
+	rm -f $(TARGET) $(TEST_SMI) $(TEST_HIST) $(TEST_REPORT)
 
 .PHONY: all test clean
 # ---------------------------------------------------------------------------
