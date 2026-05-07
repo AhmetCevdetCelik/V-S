@@ -57,7 +57,9 @@ void vis_report_print_summary(const vis_report_t* report) {
     printf("   p99.99      : %.1f ns\n", r->latency_ns.p99_99_ns);
     printf("   max         : %.1f ns\n", r->latency_ns.max_ns);
     printf("----------------------------------------\n");
-
+    // DESIGN CHOICE: Show all percentiles, even those that fail.
+    // Transparency > looking good. If P99.9 fails, the user
+    // deserves to know — not just a binary pass/fail.
     if (r->determinism_pass) {
         printf(" VERDICT: PASS — P99 %.1f ns <= threshold %.1f ns\n",
                r->latency_ns.p99_ns, r->threshold_ns);
@@ -78,6 +80,9 @@ char* vis_report_to_json(const vis_report_t* report) {
     const vis_asserted_t*  a = &report->asserted;
 
     // Allocate a generous buffer for the JSON output
+    // NOTE: V1 uses a fixed 4KB buffer for JSON serialization.
+    // This is a deliberate trade-off: simplicity over safety.
+    // V2 will switch to dynamic sizing via snprintf(nullptr, 0, ...).
     const size_t buf_size = 4096;
     char* buf = static_cast<char*>(malloc(buf_size));
     if (buf == nullptr) return nullptr;
@@ -98,6 +103,9 @@ char* vis_report_to_json(const vis_report_t* report) {
         "        \"tsc_invariant\": %s,\n"
         "        \"rdtscp_supported\": %s\n"
         "      },\n"
+        // This separation is VIS's core differentiator.
+        // detected = measured and verifiable. asserted = user's claim.
+        // A regulator reads this and knows exactly what's proven vs stated.
         "      \"asserted\": {\n"
         "        \"p_state\": \"%s\",\n"
         "        \"c_states_disabled\": \"%s\",\n"
@@ -171,6 +179,8 @@ vis_report_t* vis_report_from_json(const char* /*json_path*/) {
     // V1 stub — JSON deserialization planned for V2
     fprintf(stderr, "[vis-jitter] vis_report_from_json: not implemented in V1\n");
     return nullptr;
+    // V1 stub — JSON deserialization planned for V2.
+    // Currently reading reports is not critical; generating them is.
 }
 
 char* vis_report_sign(const vis_report_t* /*report*/,

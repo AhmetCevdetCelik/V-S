@@ -33,6 +33,9 @@ static inline uint64_t rdtscp(uint32_t* aux) {
         :
         : "memory"
     );
+    // TSC is a 64-bit counter. Upper 32 in RDX, lower 32 in RAX.
+    // RDTSCP also returns the core ID in RCX — we use this to
+    // detect thread migration mid-measurement.
     return (rdx << 32) | rax;
 }
 
@@ -185,6 +188,9 @@ vis_status_t vis_measure(
         uint64_t smi_start = 0;
         if (vis_smi_read(msr_fd, &smi_start) < 0) {
             vis_msr_close(msr_fd);
+            // DESIGN CHOICE: We discard the ENTIRE window.
+            // Partial rejection would save data but compromise auditability.
+            // A regulator doesn't want "mostly clean" — they want provably clean.
             return vis_status_t::VIS_ERR_MSR;
         }
 
@@ -192,7 +198,13 @@ vis_status_t vis_measure(
 
         for (uint64_t i = 0; i < VIS_WINDOW_SIZE; i++) {
             uint32_t core0, core1;
-
+        /**
+        * Serialize instruction stream using CPUID.
+        * Without this, the CPU's out-of-order engine can move RDTSCP
+        * across the workload boundary, making the delta meaningless.
+        * CPUID is the heaviest hammer for serialization — expensive,
+        * but correct. For measurement, correctness > speed.
+        */
             serialize();
             uint64_t t0 = rdtscp(&core0);
 
@@ -244,3 +256,16 @@ vis_status_t vis_measure(
 
     return vis_status_t::VIS_OK;
 }
+// ---------------------------------------------------------------------------
+// D E S I G N   N O T E S
+// ---------------------------------------------------------------------------
+// 1. Why static window_deltas instead of dynamic allocation?
+//    A 1M-element double array is ~8 MB. On the stack, this would blow
+//    the default Linux stack (8 MB). Static moves it to the data segment.
+//    It's a deliberate trade-off: not thread-safe, but vis-jitter is
+//    single-threaded by design.
+//
+// 2. Why serialization before AND after the workload?
+//    Without the second CPUID, the next iteration's RDTSCP could be
+//    hoisted before the current iteration's workload completes.
+//    Double-fencing is the only portable way to prevent this.

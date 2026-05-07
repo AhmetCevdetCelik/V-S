@@ -70,7 +70,14 @@ struct vis_detected_t {
     bool     tsc_invariant;         /**< Does TSC remain constant across C-state transitions? */
     bool     rdtscp_supported;      /**< CPUID indicates RDTSCP instruction support */
 };
-
+/**
+ * System properties DETECTED at runtime by the tool.
+ * These values are measured and verified — they are NOT user claims.
+ * Reported in `system.detected` block of the JSON report.
+ * 
+ * NOTE: This distinction (detected vs asserted) is the architectural core of VIS.
+ * It turns a measurement tool into a certification authority.
+ */
 /**
  * System properties ASSERTED by the user (e.g., via CLI flags).
  * These values are NOT verified by vis-jitter; they represent the user's claim
@@ -95,6 +102,9 @@ struct vis_asserted_t {
  *   - If the counter increased, the ENTIRE window is discarded.
  *   - This conservative approach produces a provably clean dataset suitable
  *     for regulatory certification.
+ * 
+ * DESIGN DECISION: I chose full-window rejection over partial rejection.
+ * Losing 1M samples is better than lying with statistics. Regulatory compliance demands this.
  */
 struct vis_smi_audit_t {
     uint64_t msr_start;             /**< SMI count at window start */
@@ -147,6 +157,9 @@ struct vis_results_t {
     bool            determinism_pass;          /**< true if P99 <= threshold_ns */
     double          threshold_ns;              /**< Threshold used for verdict */
 };
+// NOTE: In open-source tier, threshold is user-defined.
+    // In commercial tier, it's set and signed by VIS authority.
+
 
 /**
  * Top-level report structure.
@@ -254,3 +267,9 @@ void vis_report_print_summary(const vis_report_t* report);
  *                         In V1, always returns nullptr.
  */
 char* vis_report_sign(const vis_report_t* report, const char* private_key_path);
+// ---------------------------------------------------------------------------
+// D E S I G N   N O T E S
+// ---------------------------------------------------------------------------
+// VIS is not a measurement tool. It's an audit trail.
+// Every architectural decision here was made with one question in mind:
+// "Can this report be submitted to a regulator without explanation?"

@@ -5,6 +5,9 @@
 #   make clean    — remove build artifacts
 
 CXX      := g++
+# -O2 chosen deliberately over -O3:
+# O3 enables aggressive inlining and vectorization that can introduce
+# unpredictable latencies. For a measurement tool, consistency > speed.
 CXXFLAGS := -Wall -Wextra -O2 -std=c++17 -Iinclude
 LDFLAGS  := -lnuma -lpthread
 
@@ -18,7 +21,9 @@ SRCS := $(SRC_DIR)/main.cpp \
         $(SRC_DIR)/histogram.cpp \
         $(SRC_DIR)/report.cpp
 
-# Header dependencies for proper recompilation
+# Header dependencies ensure recompilation when structs or APIs change.
+# Without these, make would happily link old .o files with new headers —
+# a silent source of measurement bugs.
 HDRS := $(INC_DIR)/vis_jitter.hpp \
         $(INC_DIR)/measurement.hpp \
         $(INC_DIR)/smi_audit.hpp \
@@ -41,7 +46,9 @@ $(TARGET): $(SRCS) $(HDRS)
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
+# Run test_histogram first (no privileges needed),
+# then test_smi_audit (requires root for MSR access).
+# Order matters: if the basic logic fails, don't bother with root.
 test: $(TEST_SMI) $(TEST_HIST)
 	@echo "Running test_histogram..."
 	./$(TEST_HIST)
@@ -63,3 +70,8 @@ clean:
 	rm -f $(TARGET) $(TEST_SMI) $(TEST_HIST)
 
 .PHONY: all test clean
+# ---------------------------------------------------------------------------
+# Why no install target?
+# V1 is single-binary, single-purpose. No system-wide installation needed.
+# Run it where it's built: sudo ./vis-jitter --cpu 2 --duration 60
+# ---------------------------------------------------------------------------

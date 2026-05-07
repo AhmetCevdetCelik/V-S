@@ -32,6 +32,10 @@ static double compute_percentile(const vis_histogram_t* h, double percentile) {
     // How many samples must we pass before we reach this percentile?
     uint64_t target = static_cast<uint64_t>(
         (percentile / 100.0) * static_cast<double>(h->total_accepted)
+    // Walk buckets cumulatively. When we cross the target,
+    // return the midpoint of that bucket.
+    // Chose midpoint over bucket start because it's a better
+    // approximation for sparse histograms.
     );
 
     uint64_t cumulative = 0;
@@ -82,7 +86,9 @@ void vis_histogram_compute(const vis_histogram_t* h, vis_latency_t* out) {
                         "cannot compute latency statistics.\n");
         return;
     }
-
+    // Find min: first non-empty bucket
+    // This approach is O(buckets) but buckets are only 500.
+    // For V1, clarity beats micro-optimization.
     // Walk buckets to find min and max
     out->min_ns = 0.0;
     out->max_ns = 0.0;
@@ -109,3 +115,10 @@ void vis_histogram_compute(const vis_histogram_t* h, vis_latency_t* out) {
     out->p99_9_ns = compute_percentile(h, 99.9);
     out->p99_99_ns= compute_percentile(h, 99.99);
 }
+// ---------------------------------------------------------------------------
+// D E S I G N   N O T E S
+// ---------------------------------------------------------------------------
+// Percentiles are computed from binned data (histogram), not raw samples.
+// Trade-off: we lose nanosecond precision on individual percentiles
+// in exchange for O(1) memory and O(buckets) compute.
+// This keeps vis-jitter lightweight even on billion-sample runs.
