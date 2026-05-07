@@ -135,7 +135,7 @@ char* vis_report_to_json(const vis_report_t* report) {
         "        \"max\": %.1f\n"
         "      },\n"
         "      \"determinism_verdict\": \"%s\",\n"
-        "      \"threshold_ns\": %.1f,\n"
+        "      \"threshold_ns\": %.1f\n"
         "    }\n"
         "  }\n"
         "}\n",
