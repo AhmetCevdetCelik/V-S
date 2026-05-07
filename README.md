@@ -91,13 +91,17 @@ sudo ./vis-jitter --cpu 2 --duration 60 --threshold 100 --output report.json
 
 ## Test Results
 
-### Run 1 — Baseline (60s, no core isolation)
+Three runs were performed to validate both baseline determinism and SMI detection under deliberate interference.
+
+---
+
+### Run 1 — Baseline (60s, clean environment)
 
 **Hardware:** HP Victus Gaming Laptop 15-fa1xxx
 **CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
 **Core:** Core 2, SMT off, NUMA node 0
-**Note:** Standard kernel, no `isolcpus` applied. The 4.9 µs spike in max latency reflects OS scheduler interference — expected without core isolation.
-**Duration:** 60 seconds | **Threshold:** 100 ns | **Workload:** Empty loop (baseline calibration)
+**Note:** Standard kernel, no `isolcpus` applied. Baseline calibration — no deliberate interference.
+**Duration:** 60 seconds | **Threshold:** 100 ns | **Workload:** Empty loop
 
 ```text
 ========================================
@@ -134,19 +138,19 @@ sudo ./vis-jitter --cpu 2 --duration 60 --threshold 100 --output report.json
 ```
 
 **Key insights:**
+- Zero SMI events — measurement environment was clean
 - P50 through P99.99 all at 5.0 ns — the core is a noise-free island under standard conditions
-- Zero SMI events across 342 million samples
-- The single 4.9 µs spike is OS scheduler interference, not SMI — expected without `isolcpus`
+- The 4.9 µs max spike is OS scheduler interference, not SMI — expected without `isolcpus`
 
 ---
 
-### Run 2 — SMI Detection in Action (300s, stress test)
+### Run 2 — SMI Stress Test (300s, deliberate interference)
 
 **Hardware:** HP Victus Gaming Laptop 15-fa1xxx
 **CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
 **Core:** Core 2, SMT off, NUMA node 0
-**Note:** SMI events deliberately triggered during measurement to validate the `full_window` rejection policy.
-**Duration:** 300 seconds | **Threshold:** 100 ns | **Workload:** Empty loop (baseline calibration)
+**Note:** SMI events deliberately triggered during measurement to validate `full_window` rejection policy.
+**Duration:** 300 seconds | **Threshold:** 100 ns | **Workload:** Empty loop
 
 ```text
 ========================================
@@ -183,11 +187,70 @@ sudo ./vis-jitter --cpu 2 --duration 60 --threshold 100 --output report.json
 ```
 
 **Key insights:**
-- 6 SMI events detected and 6,000,000 samples automatically rejected — `full_window` policy worked as designed
-- Despite deliberate SMI interference, P99 remained at 15 ns — well within the 100 ns threshold
-- The rejected windows did not contaminate the final report — this is the core value proposition of `vis-jitter`
-- 1.886 billion clean samples accepted across 300 seconds — statistically robust result
-- **This run is the first publicly verifiable proof that SMI-aware latency certification works on commodity hardware**
+- 6 SMI events detected — 6,000,000 contaminated samples automatically rejected
+- Despite deliberate interference, P99 held at 15 ns — well within threshold
+- 1.886 billion clean samples accepted — statistically robust result across 5 minutes
+
+---
+
+### Run 3 — SMI Stress Test (60s, repeated validation)
+
+**Hardware:** HP Victus Gaming Laptop 15-fa1xxx
+**CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
+**Core:** Core 2, SMT off, NUMA node 0
+**Note:** Second deliberate SMI interference run, shorter duration. Confirms rejection policy is consistent across runs.
+**Duration:** 60 seconds | **Threshold:** 100 ns | **Workload:** Empty loop
+
+```text
+========================================
+ vis-jitter report
+========================================
+ Generated : 2026-05-07T03:17:04Z
+ Report ID : 43cca583-dfc6-467c-95b4-0000124c86b3
+----------------------------------------
+ System (detected)
+   Core        : 2
+   Frequency   : 4.800 GHz
+   NUMA node   : 0
+   SMT active  : no
+   TSC invar.  : yes
+   RDTSCP      : yes
+----------------------------------------
+ SMI audit
+   Policy      : full_window
+   Events      : 4
+   Rejected    : 4,000,000 samples
+----------------------------------------
+ Latency results
+   Accepted    : 322,000,000 samples
+   Core migr.  : 0 rejected
+   min         : 0.0 ns
+   p50         : 5.0 ns
+   p99         : 15.0 ns
+   p99.9       : 65.0 ns
+   p99.99      : 65.0 ns
+   max         : 3220.0 ns
+----------------------------------------
+ VERDICT: PASS — P99 15.0 ns <= threshold 100.0 ns
+========================================
+```
+
+**Key insights:**
+- 4 SMI events detected — 4,000,000 samples rejected, report uncontaminated
+- P99 consistent with Run 2 at 15 ns — rejection policy produces repeatable results
+- P99.9 at 65 ns reflects OS scheduler noise without `isolcpus`, not SMI
+
+---
+
+### Summary across all runs
+
+| Run | Duration | SMI Events | Rejected | P99 | P99.9 | Verdict |
+|---|---|---|---|---|---|---|
+| 1 — Baseline | 60s | 0 | 0 | 5.0 ns | 5.0 ns | PASS |
+| 2 — SMI stress | 300s | 6 | 6,000,000 | 15.0 ns | 15.0 ns | PASS |
+| 3 — SMI stress + | 60s | 4 | 4,000,000 | 15.0 ns | 65.0 ns | PASS |
+
+**Conclusion:** `vis-jitter` consistently detects and rejects SMI-contaminated windows across all runs. P99 remains below threshold regardless of interference. The `full_window` rejection policy is validated as both correct and repeatable on commodity hardware.
 
 ---
 
