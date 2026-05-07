@@ -1,4 +1,4 @@
-# VİS — Virtual Intelligent Scheduler
+# VIS — Virtual Intelligent Scheduler
 
 > *Reconciling Software and Silicon.*
 
@@ -8,7 +8,10 @@
 Historically, abstraction was a liberating force. It broke the chains between software and specific hardware, enabling universal portability. But over the last few decades, this decoupling reached an extreme. Software ascended to ever-higher layers of abstraction while hardware became an underutilized, deeply misunderstood black box. This gap is where modern performance dies.
 
 **The Cost of Abstraction**
-The industry optimized for general-purpose speed, but in doing so, sacrificed determinism. Today's hardware is immensely powerful, yet its behavior is unpredictable due to the layers of bureaucracy between the algorithm and the transistor. VİS is the answer to this second act of the computer revolution.
+The industry chased throughput, but sacrificed *predictability*. 
+Today's hardware is immensely powerful, yet its behavior is 
+non-deterministic — a layer of bureaucracy stands between the 
+algorithm and the transistor. VİS is the answer to this second act of the computer revolution.
 
 **The Reconciliation**
 Our mission is to reconcile these two worlds. VİS orchestrates the communication between the Compiler, the CPU, and the RAM — ensuring that software doesn't just run on hardware, but runs *with* it. We are making the transistors and the algorithms speak the same language again.
