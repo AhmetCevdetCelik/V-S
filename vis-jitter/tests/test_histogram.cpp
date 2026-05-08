@@ -76,6 +76,31 @@ int main() {
     }
     printf("[test] PASS: P99.99 within expected range.\n");
 
+    printf("[test] Checking single-sample percentile rank...\n");
+    vis_histogram_init(&h);
+    vis_histogram_add(&h, 80.0);
+    vis_histogram_compute(&h, &latency);
+    if (latency.p50_ns != 85.0 || latency.p99_ns != 85.0) {
+        printf("[test] FAILED: single sample percentile expected 85.0, "
+               "got p50 %.1f p99 %.1f\n",
+               latency.p50_ns, latency.p99_ns);
+        return 1;
+    }
+    printf("[test] PASS: single-sample percentile rank is nonzero.\n");
+
+    printf("[test] Checking overflow max reporting...\n");
+    vis_histogram_init(&h);
+    vis_histogram_add(&h, 6000.0);
+    vis_histogram_compute(&h, &latency);
+    if (latency.max_ns != VIS_HISTOGRAM_BUCKETS * VIS_BUCKET_WIDTH_NS) {
+        printf("[test] FAILED: overflow max expected %.1f, got %.1f\n",
+               static_cast<double>(VIS_HISTOGRAM_BUCKETS *
+                                   VIS_BUCKET_WIDTH_NS),
+               latency.max_ns);
+        return 1;
+    }
+    printf("[test] PASS: overflow contributes to max latency.\n");
+
     printf("[test] All tests passed.\n");
     return 0;
 }

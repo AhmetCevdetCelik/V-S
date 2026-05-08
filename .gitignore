@@ -41,8 +41,13 @@
 
 # Repo-local generated binaries
 /vis-jitter/vis-jitter
+/vis-jitter/vis-doctor
+/vis-jitter/vis-run
 /vis-jitter/test_histogram
 /vis-jitter/test_report_json
+/vis-jitter/test_public_api
+/vis-jitter/test_doctor
+/vis-jitter/test_vis_run
 /vis-jitter/test_smi_audit
 
 # Build directories
@@ -72,3 +77,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# vis-jitter generated reports
+/vis-jitter/report*.json
+/vis-jitter/*core*.json
+/vis-jitter/reports/
+/vis-jitter/doctor*.json
+/vis-jitter/doctor*.md
+/vis-jitter/run-attestation*.json

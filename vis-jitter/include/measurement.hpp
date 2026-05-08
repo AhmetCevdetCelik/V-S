@@ -18,7 +18,7 @@
 
 /**
  * Detect CPU properties and populate vis_detected_t.
- * Reads frequency from MSR, NUMA node from sched_getcpu(),
+ * Derives TSC frequency for cycle conversion, reads NUMA node,
  * TSC and RDTSCP support from CPUID.
  *
  * @param core_id   Core the measurement will run on.

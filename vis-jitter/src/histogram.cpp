@@ -10,6 +10,7 @@
 
 #include "../include/histogram.hpp"
 
+#include <cmath>        // ceil()
 #include <cstring>      // memset()
 #include <cstdio>       // fprintf()
 
@@ -29,15 +30,17 @@ static double compute_percentile(const vis_histogram_t* h, double percentile) {
         return 0.0;
     }
 
-    // How many samples must we pass before we reach this percentile?
-    uint64_t target = static_cast<uint64_t>(
+    // Nearest-rank percentile: rank is 1-based and rounded up.
+    uint64_t target = static_cast<uint64_t>(ceil(
         (percentile / 100.0) * static_cast<double>(h->total_accepted)
-    // Walk buckets cumulatively. When we cross the target,
-    // return the midpoint of that bucket.
-    // Chose midpoint over bucket start because it's a better
-    // approximation for sparse histograms.
-    );
+    ));
+    if (target == 0) {
+        target = 1;
+    }
 
+    // Walk buckets cumulatively. When we cross the target, return
+    // the midpoint of that bucket. The midpoint is a better approximation
+    // than the bucket start for sparse histograms.
     uint64_t cumulative = 0;
 
     for (int i = 0; i < VIS_HISTOGRAM_BUCKETS; i++) {
@@ -49,7 +52,7 @@ static double compute_percentile(const vis_histogram_t* h, double percentile) {
         }
     }
 
-    // All samples were in overflow — return the upper edge of the last bucket
+    // Percentile lands in overflow. Saturate to the upper edge of V1's range.
     return VIS_HISTOGRAM_BUCKETS * VIS_BUCKET_WIDTH_NS;
 }
 
@@ -100,12 +103,19 @@ void vis_histogram_compute(const vis_histogram_t* h, vis_latency_t* out) {
             break;
         }
     }
+    if (out->min_ns == 0.0 && h->buckets[0] == 0 && h->overflow > 0) {
+        out->min_ns = VIS_HISTOGRAM_BUCKETS * VIS_BUCKET_WIDTH_NS;
+    }
 
-    // Find max: last non-empty bucket
-    for (int i = VIS_HISTOGRAM_BUCKETS - 1; i >= 0; i--) {
-        if (h->buckets[i] > 0) {
-            out->max_ns = (i * VIS_BUCKET_WIDTH_NS) + VIS_BUCKET_WIDTH_NS;
-            break;
+    if (h->overflow > 0) {
+        out->max_ns = VIS_HISTOGRAM_BUCKETS * VIS_BUCKET_WIDTH_NS;
+    } else {
+        // Find max: last non-empty bucket
+        for (int i = VIS_HISTOGRAM_BUCKETS - 1; i >= 0; i--) {
+            if (h->buckets[i] > 0) {
+                out->max_ns = (i * VIS_BUCKET_WIDTH_NS) + VIS_BUCKET_WIDTH_NS;
+                break;
+            }
         }
     }
 

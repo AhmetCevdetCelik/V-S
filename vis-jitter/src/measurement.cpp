@@ -12,11 +12,16 @@
 #include "../include/smi_audit.hpp"
 #include "../include/histogram.hpp"
 
+#include <cerrno>
+#include <cmath>
+#include <cctype>
+#include <climits>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <cinttypes>
 #include <cpuid.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
 #include <numa.h>
@@ -48,7 +53,41 @@ static inline void serialize() {
 // Internal: thread pinning
 // ---------------------------------------------------------------------------
 
+static bool is_valid_core_id(uint32_t core_id) {
+    if (core_id >= CPU_SETSIZE) {
+        return false;
+    }
+
+    long configured_cpus = sysconf(_SC_NPROCESSORS_CONF);
+    if (configured_cpus <= 0 ||
+        core_id >= static_cast<uint32_t>(configured_cpus)) {
+        return false;
+    }
+
+    char online_path[128];
+    snprintf(online_path, sizeof(online_path),
+             "/sys/devices/system/cpu/cpu%u/online", core_id);
+
+    FILE* f = fopen(online_path, "r");
+    if (f == nullptr) {
+        // cpu0 commonly has no "online" file and is always online.
+        return core_id == 0;
+    }
+
+    int online = 0;
+    int read_count = fscanf(f, "%d", &online);
+    fclose(f);
+
+    return read_count == 1 && online == 1;
+}
+
 static int pin_thread_to_core(uint32_t core_id) {
+    if (!is_valid_core_id(core_id)) {
+        fprintf(stderr, "[vis-jitter] ERROR: Invalid or offline CPU core %u\n",
+                core_id);
+        return -1;
+    }
+
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
@@ -65,27 +104,131 @@ static int pin_thread_to_core(uint32_t core_id) {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: CPU frequency
+// Internal: TSC frequency
 // ---------------------------------------------------------------------------
 
-static double read_cpu_frequency_ghz(uint32_t core_id) {
-    char path[128];
-    snprintf(path, sizeof(path),
-             "/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_max_freq",
-             core_id);
+static double read_tsc_frequency_ghz_from_cpuid() {
+    uint32_t eax, ebx, ecx, edx;
 
-    FILE* f = fopen(path, "r");
-    if (f == nullptr) {
-        fprintf(stderr, "[vis-jitter] WARNING: Cannot read CPU frequency "
-                        "from %s.\n", path);
+    if (__get_cpuid(0x15, &eax, &ebx, &ecx, &edx) &&
+        eax != 0 && ebx != 0 && ecx != 0) {
+        double tsc_hz = static_cast<double>(ecx) *
+                        static_cast<double>(ebx) /
+                        static_cast<double>(eax);
+        return tsc_hz / 1e9;
+    }
+
+    return 0.0;
+}
+
+static double calibrate_tsc_frequency_ghz() {
+    struct timespec start, end;
+    uint32_t aux;
+
+    serialize();
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    uint64_t tsc_start = rdtscp(&aux);
+
+    usleep(100000);
+
+    uint64_t tsc_end = rdtscp(&aux);
+    clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+    serialize();
+
+    double elapsed = (end.tv_sec  - start.tv_sec) +
+                     (end.tv_nsec - start.tv_nsec) / 1e9;
+    if (elapsed <= 0.0 || tsc_end <= tsc_start) {
         return 0.0;
     }
 
-    uint64_t khz = 0;
-    fscanf(f, "%" SCNu64, &khz);
-    fclose(f);
+    return (static_cast<double>(tsc_end - tsc_start) / elapsed) / 1e9;
+}
 
-    return static_cast<double>(khz) / 1e6;
+static double read_tsc_frequency_ghz() {
+    double frequency_ghz = read_tsc_frequency_ghz_from_cpuid();
+    if (frequency_ghz != 0.0) {
+        return frequency_ghz;
+    }
+
+    fprintf(stderr, "[vis-jitter] WARNING: Cannot derive TSC frequency "
+                    "from CPUID; calibrating against CLOCK_MONOTONIC_RAW.\n");
+    return calibrate_tsc_frequency_ghz();
+}
+
+static bool parse_u32_token(const char* start,
+                            const char* end,
+                            uint32_t* value) {
+    if (start == nullptr || end == nullptr || value == nullptr ||
+        start >= end) {
+        return false;
+    }
+    for (const char* p = start; p < end; p++) {
+        if (!std::isdigit(static_cast<unsigned char>(*p))) return false;
+    }
+
+    errno = 0;
+    char* parsed_end = nullptr;
+    unsigned long parsed = strtoul(start, &parsed_end, 10);
+    if (errno != 0 || parsed_end != end || parsed > UINT32_MAX) {
+        return false;
+    }
+
+    *value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+static bool sibling_list_has_multiple_cpus(const char* text) {
+    if (text == nullptr) return false;
+
+    const char* token_start = text;
+    while (*token_start != '\0') {
+        while (*token_start == ' ' || *token_start == '\t' ||
+               *token_start == '\n' || *token_start == '\r' ||
+               *token_start == ',') {
+            token_start++;
+        }
+        if (*token_start == '\0') break;
+
+        const char* token_end = token_start;
+        while (*token_end != '\0' && *token_end != ',' &&
+               *token_end != '\n' && *token_end != '\r') {
+            token_end++;
+        }
+        while (token_end > token_start &&
+               (*(token_end - 1) == ' ' || *(token_end - 1) == '\t')) {
+            token_end--;
+        }
+
+        const char* dash = nullptr;
+        for (const char* p = token_start; p < token_end; p++) {
+            if (*p == '-') {
+                dash = p;
+                break;
+            }
+        }
+
+        if (dash != nullptr) {
+            uint32_t first = 0;
+            uint32_t last = 0;
+            if (parse_u32_token(token_start, dash, &first) &&
+                parse_u32_token(dash + 1, token_end, &last) &&
+                last > first) {
+                return true;
+            }
+        } else {
+            // More than one comma-separated singleton means multiple siblings.
+            const char* next = token_end;
+            while (*next == ' ' || *next == '\t' ||
+                   *next == '\n' || *next == '\r') {
+                next++;
+            }
+            if (*next == ',') return true;
+        }
+
+        token_start = token_end;
+    }
+
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,11 +237,12 @@ static double read_cpu_frequency_ghz(uint32_t core_id) {
 
 int vis_detect_system(uint32_t core_id, vis_detected_t* detected) {
     if (detected == nullptr) return -1;
+    if (!is_valid_core_id(core_id)) return -1;
 
     memset(detected, 0, sizeof(vis_detected_t));
 
     detected->cpu_core      = core_id;
-    detected->frequency_ghz = read_cpu_frequency_ghz(core_id);
+    detected->frequency_ghz = read_tsc_frequency_ghz();
 
     int node = numa_node_of_cpu(static_cast<int>(core_id));
     detected->numa_node = (node >= 0) ? static_cast<uint32_t>(node) : 0;
@@ -112,7 +256,7 @@ int vis_detect_system(uint32_t core_id, vis_detected_t* detected) {
     if (f != nullptr) {
         char buf[64];
         if (fgets(buf, sizeof(buf), f) != nullptr) {
-            detected->smt_active = (strchr(buf, ',') != nullptr);
+            detected->smt_active = sibling_list_has_multiple_cpus(buf);
         }
         fclose(f);
     }
@@ -144,6 +288,9 @@ vis_status_t vis_measure(
         results   == nullptr || detected  == nullptr) {
         return vis_status_t::VIS_ERR_INVALID_ARG;
     }
+    if (!is_valid_core_id(core_id)) {
+        return vis_status_t::VIS_ERR_INVALID_ARG;
+    }
 
     if (pin_thread_to_core(core_id) < 0) {
         return vis_status_t::VIS_ERR_AFFINITY;
@@ -154,9 +301,9 @@ vis_status_t vis_measure(
         return vis_status_t::VIS_ERR_MSR;
     }
 
-      double frequency_ghz = detected->frequency_ghz;
-    if (frequency_ghz == 0.0) {
-        fprintf(stderr, "[vis-jitter] ERROR: frequency_ghz is 0, "
+    double tsc_frequency_ghz = detected->frequency_ghz;
+    if (tsc_frequency_ghz == 0.0) {
+        fprintf(stderr, "[vis-jitter] ERROR: TSC frequency is 0, "
                         "call vis_detect_system() first.\n");
         vis_msr_close(msr_fd);
         return vis_status_t::VIS_ERR_INVALID_ARG;
@@ -221,7 +368,7 @@ vis_status_t vis_measure(
             }
 
             uint64_t cycles = t1 - t0;
-            double   ns     = static_cast<double>(cycles) / frequency_ghz;
+            double   ns     = static_cast<double>(cycles) / tsc_frequency_ghz;
             window_deltas[window_count++] = ns;
         }
 
@@ -232,7 +379,8 @@ vis_status_t vis_measure(
         }
 
         if (vis_smi_detected(smi_start, smi_end)) {
-            smi_audit->events_detected++;
+            smi_audit->contaminated_windows++;
+            smi_audit->events_detected = smi_audit->contaminated_windows;
             smi_audit->samples_rejected += window_count;
         } else {
             for (uint64_t i = 0; i < window_count; i++) {
@@ -246,6 +394,7 @@ vis_status_t vis_measure(
         vis_msr_close(msr_fd);
         return vis_status_t::VIS_ERR_MSR;
     }
+    smi_audit->msr_delta = smi_audit->msr_end - smi_audit->msr_start;
 
     vis_msr_close(msr_fd);
 
@@ -253,6 +402,82 @@ vis_status_t vis_measure(
         fprintf(stderr, "[vis-jitter] ERROR: All windows rejected.\n");
         return vis_status_t::VIS_ERR_NO_SAMPLES;
     }
+
+    return vis_status_t::VIS_OK;
+}
+
+static void generate_uuid(char* buf, size_t buf_size) {
+    snprintf(buf, buf_size,
+        "%08x-%04x-4%03x-%04x-%012x",
+        static_cast<unsigned int>(rand()),
+        static_cast<unsigned int>(rand() & 0xffff),
+        static_cast<unsigned int>(rand() & 0x0fff),
+        static_cast<unsigned int>((rand() & 0x3fff) | 0x8000),
+        static_cast<unsigned int>(rand())
+    );
+}
+
+static void generate_timestamp(char* buf, size_t buf_size) {
+    time_t now = time(nullptr);
+    struct tm* utc = gmtime(&now);
+    if (utc == nullptr) {
+        snprintf(buf, buf_size, "unknown");
+        return;
+    }
+    strftime(buf, buf_size, "%Y-%m-%dT%H:%M:%SZ", utc);
+}
+
+vis_status_t vis_jitter_run(
+    uint32_t        core_id,
+    uint32_t        duration_sec,
+    double          threshold_ns,
+    vis_workload_fn workload,
+    void*           context,
+    vis_report_t*   report
+) {
+    if (report == nullptr || duration_sec == 0 ||
+        !std::isfinite(threshold_ns) || threshold_ns < 0.0) {
+        return vis_status_t::VIS_ERR_INVALID_ARG;
+    }
+    if (!is_valid_core_id(core_id)) {
+        return vis_status_t::VIS_ERR_INVALID_ARG;
+    }
+
+    memset(report, 0, sizeof(vis_report_t));
+
+    strncpy(report->schema_version, "1.0",
+            sizeof(report->schema_version) - 1);
+    strncpy(report->generator, "vis-jitter " VIS_JITTER_VERSION,
+            sizeof(report->generator) - 1);
+
+    srand(static_cast<unsigned>(time(nullptr)));
+    generate_uuid(report->report_id, sizeof(report->report_id));
+    generate_timestamp(report->generated_at, sizeof(report->generated_at));
+
+    if (vis_detect_system(core_id, &report->detected) < 0) {
+        return vis_status_t::VIS_ERR_INVALID_ARG;
+    }
+
+    vis_histogram_t histogram;
+    vis_status_t status = vis_measure(
+        core_id,
+        duration_sec,
+        &report->detected,
+        workload,
+        context,
+        &histogram,
+        &report->smi_audit,
+        &report->results
+    );
+    if (status != vis_status_t::VIS_OK) {
+        return status;
+    }
+
+    vis_histogram_compute(&histogram, &report->results.latency_ns);
+    report->results.histogram = histogram;
+    report->results.threshold_ns = threshold_ns;
+    report->results.determinism_pass =
+        (report->results.latency_ns.p99_ns <= threshold_ns);
 
     return vis_status_t::VIS_OK;
 }
