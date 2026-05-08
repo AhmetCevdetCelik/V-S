@@ -1,4 +1,4 @@
-# VİS — Virtual Intelligent Scheduler
+# VIS — Virtual Intelligent Scheduler
 
 > *Reconciling Software and Silicon.*
 
@@ -8,19 +8,19 @@
 Historically, abstraction was a liberating force. It broke the chains between software and specific hardware, enabling universal portability. But over the last few decades, this decoupling reached an extreme. Software ascended to ever-higher layers of abstraction while hardware became an underutilized, deeply misunderstood black box. This gap is where modern performance dies.
 
 **The Cost of Abstraction**
-The industry optimized for general-purpose speed, but in doing so, sacrificed determinism. Today's hardware is immensely powerful, yet its behavior is unpredictable due to the layers of bureaucracy between the algorithm and the transistor. VİS is the answer to this second act of the computer revolution.
+The industry optimized for general-purpose speed, but in doing so, sacrificed determinism. Today's hardware is immensely powerful, yet its behavior is unpredictable due to the layers of bureaucracy between the algorithm and the transistor. VIS is the answer to this second act of the computer revolution.
 
 **The Reconciliation**
-Our mission is to reconcile these two worlds. VİS orchestrates the communication between the Compiler, the CPU, and the RAM — ensuring that software doesn't just run on hardware, but runs *with* it. We are making the transistors and the algorithms speak the same language again.
+Our mission is to reconcile these two worlds. VIS orchestrates the communication between the Compiler, the CPU, and the RAM — ensuring that software doesn't just run on hardware, but runs *with* it. We are making the transistors and the algorithms speak the same language again.
 
 **The Proof**
-VİS is the functional proof of this philosophy on the x86 architecture. By regaining control over the silicon, we move beyond just running code — we achieve atomic precision in execution.
+VIS is the functional proof of this philosophy on the x86 architecture. By regaining control over the silicon, we move beyond just running code — we achieve atomic precision in execution.
 
 ---
 
-## What is VİS?
+## What is VIS?
 
-VİS is a layered determinism toolkit for Intel x86 systems. It targets sub-100 ns P99 tail latency on high-priority threads by coordinating the compiler, OS, and hardware simultaneously.
+VIS is a layered determinism toolkit for Intel x86 systems. It targets sub-100 ns P99 tail latency on high-priority threads by coordinating the compiler, OS, and hardware simultaneously.
 
 It is **not** a single optimization. It is a full-stack discipline.
 
