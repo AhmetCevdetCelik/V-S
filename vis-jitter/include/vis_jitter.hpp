@@ -3,7 +3,7 @@
 /**
  * vis_jitter.hpp
  *
- * VİS (Virtual Intelligent Scheduler) — Jitter Measurement Core Header
+ * VIS (Virtual Intelligent Scheduler) — Jitter Measurement Core Header
  *
  * This file defines all fundamental types, constants, enums, and public
  * API signatures used by the vis-jitter tool. Every translation unit
@@ -147,7 +147,7 @@ struct vis_histogram_t {
  * Contains both the raw histogram and the percentile breakdown.
  * `determinism_pass` is true iff P99 <= threshold_ns.
  * In the open-source tier the threshold is user-defined;
- * in the commercial tier it is set and signed by the VİS authority.
+ * in the commercial tier it is set and signed by the VIS authority.
  */
 struct vis_results_t {
     uint64_t        samples_accepted;          /**< Accepted sample count */
@@ -166,7 +166,7 @@ struct vis_results_t {
  *
  * Populated entirely by vis_jitter_run() and serialized to JSON
  * by vis_report_to_json(). The schema mirrors the one designed
- * for the VİS determinism report.
+ * for the VIS determinism report.
  */
 struct vis_report_t {
     char             schema_version[8];   /**< Report format version, e.g. "1.0" */
