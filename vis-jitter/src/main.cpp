@@ -13,37 +13,13 @@
 #include "../include/vis_jitter.hpp"
 #include "../include/measurement.hpp"
 #include "../include/report.hpp"
-#include "../include/histogram.hpp"
 
+#include <cerrno>
+#include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
-
-// ---------------------------------------------------------------------------
-// Internal: UUID v4
-// ---------------------------------------------------------------------------
-
-static void generate_uuid(char* buf, size_t buf_size) {
-    snprintf(buf, buf_size,
-        "%08x-%04x-4%03x-%04x-%012x",
-        rand() & 0xffffffff,
-        rand() & 0xffff,
-        rand() & 0x0fff,
-        (rand() & 0x3fff) | 0x8000,
-        (unsigned int)rand()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Internal: ISO 8601 timestamp
-// ---------------------------------------------------------------------------
-
-static void generate_timestamp(char* buf, size_t buf_size) {
-    time_t now = time(nullptr);
-    struct tm* utc = gmtime(&now);
-    strftime(buf, buf_size, "%Y-%m-%dT%H:%M:%SZ", utc);
-}
 
 // ---------------------------------------------------------------------------
 // Internal: argument parsing
@@ -66,6 +42,49 @@ static void print_usage(const char* argv0) {
     );
 }
 
+static bool parse_uint32(const char* text, uint32_t* out) {
+    if (text == nullptr || text[0] == '\0' || out == nullptr) {
+        return false;
+    }
+    if (text[0] == '-') {
+        return false;
+    }
+
+    errno = 0;
+    char* end = nullptr;
+    unsigned long value = strtoul(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value > UINT32_MAX) {
+        return false;
+    }
+
+    *out = static_cast<uint32_t>(value);
+    return true;
+}
+
+static bool parse_positive_uint32(const char* text, uint32_t* out) {
+    if (!parse_uint32(text, out)) {
+        return false;
+    }
+    return *out > 0;
+}
+
+static bool parse_nonnegative_double(const char* text, double* out) {
+    if (text == nullptr || text[0] == '\0' || out == nullptr) {
+        return false;
+    }
+
+    errno = 0;
+    char* end = nullptr;
+    double value = strtod(text, &end);
+    if (errno != 0 || end == text || *end != '\0' ||
+        !std::isfinite(value) || value < 0.0) {
+        return false;
+    }
+
+    *out = value;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -83,11 +102,23 @@ int main(int argc, char* argv[]) {
             print_usage(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "--cpu") == 0 && i + 1 < argc) {
-            core_id = static_cast<uint32_t>(atoi(argv[++i]));
+            if (!parse_uint32(argv[++i], &core_id)) {
+                fprintf(stderr, "[vis-jitter] Invalid --cpu value.\n");
+                print_usage(argv[0]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
-            duration_sec = static_cast<uint32_t>(atoi(argv[++i]));
+            if (!parse_positive_uint32(argv[++i], &duration_sec)) {
+                fprintf(stderr, "[vis-jitter] Invalid --duration value.\n");
+                print_usage(argv[0]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--threshold") == 0 && i + 1 < argc) {
-            threshold_ns = atof(argv[++i]);
+            if (!parse_nonnegative_double(argv[++i], &threshold_ns)) {
+                fprintf(stderr, "[vis-jitter] Invalid --threshold value.\n");
+                print_usage(argv[0]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             output_path = argv[++i];
         } else {
@@ -97,76 +128,29 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Seed random for UUID generation
-    srand(static_cast<unsigned>(time(nullptr)));
-
     printf("[vis-jitter] Starting measurement on core %u "
            "for %u seconds (threshold: %.1f ns)\n",
            core_id, duration_sec, threshold_ns);
 
-    // Initialize report
     vis_report_t report;
-    memset(&report, 0, sizeof(vis_report_t));
-
-    strncpy(report.schema_version, "1.0",
-            sizeof(report.schema_version) - 1);
-    strncpy(report.generator, "vis-jitter " VIS_JITTER_VERSION,
-            sizeof(report.generator) - 1);
-
-    generate_uuid(report.report_id, sizeof(report.report_id));
-    generate_timestamp(report.generated_at, sizeof(report.generated_at));
-
-    // Step 1: detect system properties
-    printf("[vis-jitter] Detecting system properties...\n");
-    if (vis_detect_system(core_id, &report.detected) < 0) {
-        fprintf(stderr, "[vis-jitter] ERROR: System detection failed.\n");
-        return 1;
-    }
-
-    printf("[vis-jitter] Core %u | %.3f GHz | NUMA %u | SMT: %s | "
-           "TSC invariant: %s\n",
-           report.detected.cpu_core,
-           report.detected.frequency_ghz,
-           report.detected.numa_node,
-           report.detected.smt_active      ? "yes" : "no",
-           report.detected.tsc_invariant    ? "yes" : "no");
-
-    // Step 2: run measurement
     printf("[vis-jitter] Running measurement...\n");
 
-    vis_histogram_t histogram;
-    vis_status_t status = vis_measure(
+    vis_status_t status = vis_jitter_run(
         core_id,
         duration_sec,
-        &report.detected,
+        threshold_ns,
         nullptr,        // workload: NULL = empty loop (baseline)
         nullptr,        // context
-        &histogram,
-        &report.smi_audit,
-        &report.results
+        &report
     );
-
     if (status != vis_status_t::VIS_OK) {
         fprintf(stderr, "[vis-jitter] ERROR: Measurement failed (code %d).\n",
                 static_cast<int>(status));
         return 1;
     }
 
-    // Step 3: compute latency statistics from histogram
-    vis_histogram_compute(&histogram, &report.results.latency_ns);
-
-    // Copy histogram data to report
-    report.results.histogram = histogram;
-
-    // Step 4: apply threshold verdict
-    report.results.threshold_ns    = threshold_ns;
-    report.results.determinism_pass =
-        (report.results.latency_ns.p99_ns <= threshold_ns);
-
-    // Step 5: print terminal summary
     vis_report_print_summary(&report);
 
-    // Step 6: save JSON if output path given
     if (output_path != nullptr) {
         char* json = vis_report_to_json(&report);
         if (json == nullptr) {

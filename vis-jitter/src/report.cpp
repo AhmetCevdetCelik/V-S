@@ -12,6 +12,56 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+static std::string json_escape(const char* value) {
+    std::string out;
+    if (value == nullptr) {
+        return out;
+    }
+
+    for (const unsigned char* p =
+             reinterpret_cast<const unsigned char*>(value);
+         *p != '\0'; p++) {
+        switch (*p) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (*p < 0x20) {
+                    char escaped[7];
+                    snprintf(escaped, sizeof(escaped), "\\u%04x", *p);
+                    out += escaped;
+                } else {
+                    out += static_cast<char>(*p);
+                }
+                break;
+        }
+    }
+
+    return out;
+}
+
+template <typename... Args>
+static void append_format(std::string* out, const char* format, Args... args) {
+    int needed = snprintf(nullptr, 0, format, args...);
+    if (needed <= 0) {
+        return;
+    }
+
+    std::vector<char> buffer(static_cast<size_t>(needed) + 1);
+    snprintf(buffer.data(), buffer.size(), format, args...);
+    out->append(buffer.data(), static_cast<size_t>(needed));
+}
 
 // ---------------------------------------------------------------------------
 // Public API implementation
@@ -33,7 +83,7 @@ void vis_report_print_summary(const vis_report_t* report) {
     printf("----------------------------------------\n");
     printf(" System (detected)\n");
     printf("   Core        : %u\n",  d->cpu_core);
-    printf("   Frequency   : %.3f GHz\n", d->frequency_ghz);
+    printf("   TSC freq.   : %.3f GHz\n", d->frequency_ghz);
     printf("   NUMA node   : %u\n",  d->numa_node);
     printf("   SMT active  : %s\n",  d->smt_active        ? "yes" : "no");
     printf("   TSC invar.  : %s\n",  d->tsc_invariant      ? "yes" : "no");
@@ -41,7 +91,8 @@ void vis_report_print_summary(const vis_report_t* report) {
     printf("----------------------------------------\n");
     printf(" SMI audit\n");
     printf("   Policy      : %s\n",  s->rejection_policy);
-    printf("   Events      : %u\n",  s->events_detected);
+    printf("   Windows     : %u contaminated\n", s->contaminated_windows);
+    printf("   MSR delta   : %llu\n", (unsigned long long)s->msr_delta);
     printf("   Rejected    : %llu samples\n",
            (unsigned long long)s->samples_rejected);
     printf("----------------------------------------\n");
@@ -79,15 +130,18 @@ char* vis_report_to_json(const vis_report_t* report) {
     const vis_detected_t*  d = &report->detected;
     const vis_asserted_t*  a = &report->asserted;
 
-    // Allocate a generous buffer for the JSON output
-    // NOTE: V1 uses a fixed 4KB buffer for JSON serialization.
-    // This is a deliberate trade-off: simplicity over safety.
-    // V2 will switch to dynamic sizing via snprintf(nullptr, 0, ...).
-    const size_t buf_size = 4096;
-    char* buf = static_cast<char*>(malloc(buf_size));
-    if (buf == nullptr) return nullptr;
+    std::string schema_version = json_escape(report->schema_version);
+    std::string report_id = json_escape(report->report_id);
+    std::string generated_at = json_escape(report->generated_at);
+    std::string generator = json_escape(report->generator);
+    std::string p_state = json_escape(a->p_state);
+    std::string c_states_disabled = json_escape(a->c_states_disabled);
+    std::string egress_memory = json_escape(a->egress_memory);
+    std::string rx_buffer_memory = json_escape(a->rx_buffer_memory);
+    std::string rejection_policy = json_escape(s->rejection_policy);
 
-    snprintf(buf, buf_size,
+    std::string json;
+    append_format(&json,
         "{\n"
         "  \"vis_report\": {\n"
         "    \"schema_version\": \"%s\",\n"
@@ -119,7 +173,9 @@ char* vis_report_to_json(const vis_report_t* report) {
         "    \"smi_audit\": {\n"
         "      \"msr_start\": %llu,\n"
         "      \"msr_end\": %llu,\n"
+        "      \"msr_delta\": %llu,\n"
         "      \"events_detected\": %u,\n"
+        "      \"contaminated_windows\": %u,\n"
         "      \"samples_rejected\": %llu,\n"
         "      \"rejection_policy\": \"%s\"\n"
         "    },\n"
@@ -139,27 +195,29 @@ char* vis_report_to_json(const vis_report_t* report) {
         "    }\n"
         "  }\n"
         "}\n",
-        report->schema_version,
-        report->report_id,
-        report->generated_at,
-        report->generator,
+        schema_version.c_str(),
+        report_id.c_str(),
+        generated_at.c_str(),
+        generator.c_str(),
         d->cpu_core,
         d->frequency_ghz,
         d->numa_node,
         d->smt_active       ? "true" : "false",
         d->tsc_invariant     ? "true" : "false",
         d->rdtscp_supported  ? "true" : "false",
-        a->p_state,
-        a->c_states_disabled,
+        p_state.c_str(),
+        c_states_disabled.c_str(),
         a->hugepages_1gb     ? "true" : "false",
-        a->egress_memory,
-        a->rx_buffer_memory,
+        egress_memory.c_str(),
+        rx_buffer_memory.c_str(),
         a->ddio_enabled      ? "true" : "false",
         (unsigned long long)s->msr_start,
         (unsigned long long)s->msr_end,
+        (unsigned long long)s->msr_delta,
         s->events_detected,
+        s->contaminated_windows,
         (unsigned long long)s->samples_rejected,
-        s->rejection_policy,
+        rejection_policy.c_str(),
         (unsigned long long)r->samples_accepted,
         (unsigned long long)r->core_migration_rejected,
         r->latency_ns.min_ns,
@@ -172,15 +230,16 @@ char* vis_report_to_json(const vis_report_t* report) {
         r->threshold_ns
     );
 
+    char* buf = static_cast<char*>(malloc(json.size() + 1));
+    if (buf == nullptr) return nullptr;
+
+    memcpy(buf, json.c_str(), json.size() + 1);
     return buf;
 }
-// Fix 4: stubs for functions declared in vis_jitter.hpp
 vis_report_t* vis_report_from_json(const char* /*json_path*/) {
     // V1 stub — JSON deserialization planned for V2
     fprintf(stderr, "[vis-jitter] vis_report_from_json: not implemented in V1\n");
     return nullptr;
-    // V1 stub — JSON deserialization planned for V2.
-    // Currently reading reports is not critical; generating them is.
 }
 
 char* vis_report_sign(const vis_report_t* /*report*/,

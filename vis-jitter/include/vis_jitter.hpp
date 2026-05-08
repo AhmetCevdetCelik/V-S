@@ -64,7 +64,7 @@ enum class vis_status_t : int {
  */
 struct vis_detected_t {
     uint32_t cpu_core;              /**< Core index the measurement ran on */
-    double   frequency_ghz;         /**< Actual CPU frequency read from MSR (GHz) */
+    double   frequency_ghz;         /**< Actual TSC frequency used for cycle conversion (GHz) */
     uint32_t numa_node;             /**< NUMA node of the measuring core */
     bool     smt_active;            /**< Is Hyper-Threading enabled? */
     bool     tsc_invariant;         /**< Does TSC remain constant across C-state transitions? */
@@ -107,9 +107,11 @@ struct vis_asserted_t {
  * Losing 1M samples is better than lying with statistics. Regulatory compliance demands this.
  */
 struct vis_smi_audit_t {
-    uint64_t msr_start;             /**< SMI count at window start */
-    uint64_t msr_end;               /**< SMI count at window end */
-    uint32_t events_detected;       /**< Total SMI events across all windows */
+    uint64_t msr_start;             /**< SMI count at measurement start */
+    uint64_t msr_end;               /**< SMI count at measurement end */
+    uint64_t msr_delta;             /**< Total IA32_SMI_COUNT increase */
+    uint32_t events_detected;       /**< Backward-compatible alias for contaminated_windows */
+    uint32_t contaminated_windows;  /**< Measurement windows rejected due to SMI */
     uint64_t samples_rejected;      /**< Samples discarded due to SMI events */
     char     rejection_policy[32];  /**< Always "full_window" in V1 */
 };

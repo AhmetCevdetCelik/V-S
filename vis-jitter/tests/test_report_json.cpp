@@ -58,9 +58,9 @@ static void populate_report(vis_report_t* report) {
     report->detected.tsc_invariant = true;
     report->detected.rdtscp_supported = true;
 
-    std::strncpy(report->asserted.p_state, "P0_locked",
+    std::strncpy(report->asserted.p_state, "P0\"locked\\test",
                  sizeof(report->asserted.p_state) - 1);
-    std::strncpy(report->asserted.c_states_disabled, "C1E,C3,C6",
+    std::strncpy(report->asserted.c_states_disabled, "C1E\nC3\tC6",
                  sizeof(report->asserted.c_states_disabled) - 1);
     report->asserted.hugepages_1gb = true;
     std::strncpy(report->asserted.egress_memory, "UC",
@@ -70,8 +70,10 @@ static void populate_report(vis_report_t* report) {
     report->asserted.ddio_enabled = false;
 
     report->smi_audit.msr_start = 100;
-    report->smi_audit.msr_end = 102;
+    report->smi_audit.msr_end = 104;
+    report->smi_audit.msr_delta = 4;
     report->smi_audit.events_detected = 2;
+    report->smi_audit.contaminated_windows = 2;
     report->smi_audit.samples_rejected = 2'000'000;
     std::strncpy(report->smi_audit.rejection_policy, "full_window",
                  sizeof(report->smi_audit.rejection_policy) - 1);
@@ -108,12 +110,16 @@ int main() {
         "\"report_id\": \"00000000-0000-4000-8000-000000000000\"",
         "\"cpu_core\": 2",
         "\"frequency_ghz\": 4.800",
+        "\"msr_delta\": 4",
         "\"events_detected\": 2",
+        "\"contaminated_windows\": 2",
         "\"samples_rejected\": 2000000",
         "\"samples_accepted\": 10000000",
         "\"p99\": 15.0",
         "\"determinism_verdict\": \"PASS\"",
-        "\"threshold_ns\": 100.0"
+        "\"threshold_ns\": 100.0",
+        "\"p_state\": \"P0\\\"locked\\\\test\"",
+        "\"c_states_disabled\": \"C1E\\nC3\\tC6\""
     };
 
     for (size_t i = 0; i < sizeof(required_fields) / sizeof(required_fields[0]); i++) {
