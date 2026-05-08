@@ -44,6 +44,10 @@ Tests are standalone C++ executables under `vis-jitter/tests/` named `test_<comp
 
 Recent history uses both conventional prefixes (`fix:`, `docs:`) and milestone-style messages (`V1: ...`). Prefer concise imperative commits with a scope when useful, such as `fix: emit valid JSON reports` or `docs: update SMI results`. Pull requests should describe the behavioral change, list test commands run, call out root-required validation, and include sample report output or screenshots when CLI/report formatting changes.
 
+## Agent Workflow
+
+Before adding files or starting a new task, check the current branch and working tree. If the work is not part of the current branch scope, create a new focused branch first using `<type>/<short-name>`, for example `feat/doctor-runtime-attestation` or `fix/smt-detection`. Do not add new work onto `main` or an unrelated feature branch unless the user explicitly asks for that.
+
 ## Security & Configuration Tips
 
 Do not commit generated reports containing machine-specific identifiers unless they are intentional evidence. Treat `sudo`, MSR access, CPU isolation settings, and NUMA assumptions as environment-specific; document them in PR notes when they affect results.
