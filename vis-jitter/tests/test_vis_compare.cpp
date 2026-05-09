@@ -50,9 +50,34 @@ int main() {
         return 1;
     }
 
+    vis_compare_metric_spec_t spec;
+    if (!vis_compare_parse_metric_spec("score=score: ([0-9.]+)",
+                                       &spec,
+                                       &error)) {
+        std::printf("[test] FAILED: parse metric spec: %s\n",
+                    error.c_str());
+        return 1;
+    }
+    std::vector<vis_compare_metric_result_t> metrics;
+    vis_compare_capture_metrics("score: 42.5\n", {spec}, &metrics);
+    if (metrics.size() != 1 ||
+        !metrics[0].matched ||
+        metrics[0].value != 42.5 ||
+        metrics[0].raw_value != "42.5") {
+        std::printf("[test] FAILED: metric capture did not parse value.\n");
+        return 1;
+    }
+    vis_compare_capture_metrics("no score here\n", {spec}, &metrics);
+    if (metrics.size() != 1 || metrics[0].matched) {
+        std::printf("[test] FAILED: unmatched metric should be reported.\n");
+        return 1;
+    }
+
     result.profile_source = "primary";
     result.attestation_path = "vis-compare-runs/primary.json";
+    result.output_path = "vis-compare-runs/primary.output.txt";
     result.duration_ms = 42;
+    vis_compare_capture_metrics("score: 42.5\n", {spec}, &result.metrics);
 
     vis_compare_report_t report;
     report.policy_path = "doctor.json";
@@ -65,6 +90,9 @@ int main() {
         !contains(json, "\"profiles\"") ||
         !contains(json, "\"profile_source\": \"primary\"") ||
         !contains(json, "\"affinity_escape_count\": 1") ||
+        !contains(json, "\"captured_output_path\"") ||
+        !contains(json, "\"metrics\"") ||
+        !contains(json, "\"value\": 42.5") ||
         !contains(json, "\"recommendation\"")) {
         std::printf("[test] FAILED: compare JSON missing fields.\n");
         return 1;
@@ -72,7 +100,8 @@ int main() {
 
     std::string md = vis_compare_to_markdown(report);
     if (!contains(md, "# VIS Compare AI Context") ||
-        !contains(md, "## Profile Comparison") ||
+        !contains(md, "## Runtime Control Evidence") ||
+        !contains(md, "## Application Metrics") ||
         !contains(md, "## Recommendation")) {
         std::printf("[test] FAILED: compare Markdown missing sections.\n");
         return 1;
