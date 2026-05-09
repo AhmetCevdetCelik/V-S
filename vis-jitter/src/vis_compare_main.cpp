@@ -29,6 +29,8 @@ static void print_usage(const char* argv0) {
         "  --profile <name>           Expected profile name (default: strict)\n"
         "  --vis-run <path>           vis-run binary path (default: ./vis-run)\n"
         "  --runs-dir <dir>           Per-profile attestations (default: vis-compare-runs)\n"
+        "  --metric <name=regex>      Capture numeric workload metric from output\n"
+        "  --show-output              Also print captured profile output\n"
         "  --output <file.json>       Write VIS Compare JSON report\n"
         "  --llm <file.md>            Write AI-readable Markdown report\n"
         "  --help                     Show this message\n"
@@ -68,6 +70,9 @@ static bool run_vis_run_profile(
     const std::string& profile_name,
     const std::string& cpu_source,
     const std::string& attestation_path,
+    const std::string& output_path,
+    bool show_output,
+    const std::vector<vis_compare_metric_spec_t>& metric_specs,
     const std::vector<std::string>& workload_argv,
     vis_compare_profile_result_t* result
 ) {
@@ -89,16 +94,46 @@ static bool run_vis_run_profile(
     }
     argv.push_back(nullptr);
 
+    int output_pipe[2] = {-1, -1};
+    if (pipe(output_pipe) != 0) return false;
+
     auto start = std::chrono::steady_clock::now();
     pid_t pid = fork();
-    if (pid < 0) return false;
+    if (pid < 0) {
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+        return false;
+    }
 
     if (pid == 0) {
+        close(output_pipe[0]);
+        dup2(output_pipe[1], STDOUT_FILENO);
+        dup2(output_pipe[1], STDERR_FILENO);
+        close(output_pipe[1]);
         execvp(vis_run_path.c_str(), argv.data());
         fprintf(stderr, "[vis-compare] ERROR: execvp vis-run failed: %s\n",
                 strerror(errno));
         _exit(127);
     }
+
+    close(output_pipe[1]);
+    std::string captured_output;
+    char buffer[4096];
+    while (true) {
+        ssize_t n = read(output_pipe[0], buffer, sizeof(buffer));
+        if (n > 0) {
+            captured_output.append(buffer, static_cast<size_t>(n));
+            if (show_output) {
+                fwrite(buffer, 1, static_cast<size_t>(n), stdout);
+            }
+            continue;
+        }
+        if (n == 0) break;
+        if (errno == EINTR) continue;
+        close(output_pipe[0]);
+        return false;
+    }
+    close(output_pipe[0]);
 
     int status = 0;
     while (waitpid(pid, &status, 0) < 0) {
@@ -107,10 +142,16 @@ static bool run_vis_run_profile(
     }
     auto end = std::chrono::steady_clock::now();
 
+    std::string error;
+    if (!vis_compare_write_file(output_path.c_str(), captured_output,
+                                &error)) {
+        fprintf(stderr, "[vis-compare] ERROR: %s\n", error.c_str());
+        return false;
+    }
+
     std::string json;
     if (!read_file(attestation_path, &json)) return false;
 
-    std::string error;
     if (!vis_compare_parse_run_attestation(json, result, &error)) {
         fprintf(stderr, "[vis-compare] ERROR: cannot parse %s: %s\n",
                 attestation_path.c_str(), error.c_str());
@@ -119,12 +160,15 @@ static bool run_vis_run_profile(
 
     result->profile_source = cpu_source;
     result->attestation_path = attestation_path;
+    result->output_path = output_path;
     result->duration_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
     );
     if (result->exit_code != command_exit_code(status)) {
         result->exit_code = command_exit_code(status);
     }
+    vis_compare_capture_metrics(captured_output, metric_specs,
+                                &result->metrics);
     return true;
 }
 
@@ -133,6 +177,7 @@ static std::string build_recommendation(
 ) {
     bool primary_ok = false;
     bool secondary_ok = false;
+    std::vector<std::string> metric_notes;
     for (const auto& p : profiles) {
         if (p.profile_source == "primary" && p.exit_code == 0 &&
             p.affinity_escape_count == 0) {
@@ -144,20 +189,53 @@ static std::string build_recommendation(
         }
     }
 
+    if (profiles.size() >= 2) {
+        const auto& first = profiles[0];
+        const auto& second = profiles[1];
+        for (const auto& a : first.metrics) {
+            if (!a.matched) continue;
+            for (const auto& b : second.metrics) {
+                if (a.name == b.name && b.matched) {
+                    if (a.value > b.value) {
+                        metric_notes.push_back(
+                            a.name + " observed higher on " +
+                            first.profile_source + ".");
+                    } else if (b.value > a.value) {
+                        metric_notes.push_back(
+                            b.name + " observed higher on " +
+                            second.profile_source + ".");
+                    } else {
+                        metric_notes.push_back(
+                            a.name + " observed equal across compared profiles.");
+                    }
+                }
+            }
+        }
+    }
+
+    std::string base;
     if (primary_ok && secondary_ok) {
-        return "Use primary as the first latency-sensitive profile and "
+        base = "Use primary as the first latency-sensitive profile and "
                "secondary as the first throughput comparison profile.";
-    }
-    if (primary_ok) {
-        return "Primary completed cleanly; inspect secondary before using it "
+    } else if (primary_ok) {
+        base = "Primary completed cleanly; inspect secondary before using it "
                "as a throughput comparison profile.";
-    }
-    if (secondary_ok) {
-        return "Secondary completed cleanly, but primary should be inspected "
+    } else if (secondary_ok) {
+        base = "Secondary completed cleanly, but primary should be inspected "
                "before treating it as the latency-sensitive profile.";
+    } else {
+        base = "No compared profile completed cleanly; inspect per-profile VIS Run "
+               "attestations before making a placement decision.";
     }
-    return "No compared profile completed cleanly; inspect per-profile VIS Run "
-           "attestations before making a placement decision.";
+
+    if (!metric_notes.empty()) {
+        base += " Application metric evidence: ";
+        for (size_t i = 0; i < metric_notes.size(); i++) {
+            if (i != 0) base += " ";
+            base += metric_notes[i];
+        }
+    }
+    return base;
 }
 
 static void print_summary(const vis_compare_report_t& report) {
@@ -174,6 +252,18 @@ static void print_summary(const vis_compare_report_t& report) {
                p.verdict.c_str());
         printf("  CPUs: %s\n",
                vis_compare_join_cpus(p.assigned_cpus).c_str());
+        if (!p.metrics.empty()) {
+            printf("  Metrics:");
+            for (const auto& m : p.metrics) {
+                if (m.matched) {
+                    printf(" %s=%g", m.name.c_str(), m.value);
+                } else {
+                    printf(" %s=n/a", m.name.c_str());
+                }
+            }
+            printf("\n");
+        }
+        printf("  Output: %s\n", p.output_path.c_str());
     }
     printf("\nRecommendation:\n%s\n\n", report.recommendation.c_str());
 }
@@ -185,6 +275,8 @@ int main(int argc, char* argv[]) {
     const char* runs_dir = "vis-compare-runs";
     const char* output_path = nullptr;
     const char* llm_path = nullptr;
+    bool show_output = false;
+    std::vector<vis_compare_metric_spec_t> metric_specs;
     int command_index = -1;
 
     for (int i = 1; i < argc; i++) {
@@ -199,6 +291,16 @@ int main(int argc, char* argv[]) {
             vis_run_path = argv[++i];
         } else if (strcmp(argv[i], "--runs-dir") == 0 && i + 1 < argc) {
             runs_dir = argv[++i];
+        } else if (strcmp(argv[i], "--metric") == 0 && i + 1 < argc) {
+            vis_compare_metric_spec_t spec;
+            std::string error;
+            if (!vis_compare_parse_metric_spec(argv[++i], &spec, &error)) {
+                fprintf(stderr, "[vis-compare] ERROR: %s\n", error.c_str());
+                return 1;
+            }
+            metric_specs.push_back(spec);
+        } else if (strcmp(argv[i], "--show-output") == 0) {
+            show_output = true;
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             output_path = argv[++i];
         } else if (strcmp(argv[i], "--llm") == 0 && i + 1 < argc) {
@@ -238,13 +340,18 @@ int main(int argc, char* argv[]) {
     for (const char* source : sources) {
         std::string attestation_path =
             std::string(runs_dir) + "/" + source + ".json";
+        std::string captured_output_path =
+            std::string(runs_dir) + "/" + source + ".output.txt";
         vis_compare_profile_result_t profile_result;
         if (!run_vis_run_profile(vis_run_path, policy_path, profile_name,
-                                 source, attestation_path, workload_argv,
+                                 source, attestation_path,
+                                 captured_output_path, show_output,
+                                 metric_specs, workload_argv,
                                  &profile_result)) {
             all_invocations_started = false;
             profile_result.profile_source = source;
             profile_result.attestation_path = attestation_path;
+            profile_result.output_path = captured_output_path;
             profile_result.exit_code = 127;
             profile_result.verdict = "VIS_RUN_FAILED";
         }

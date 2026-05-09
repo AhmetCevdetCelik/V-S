@@ -11,9 +11,11 @@
 #include <cerrno>
 #include <climits>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <regex>
 #include <sstream>
 
 static void set_error(std::string* error, const std::string& message) {
@@ -229,6 +231,83 @@ bool vis_compare_parse_run_attestation(
     return true;
 }
 
+bool vis_compare_parse_metric_spec(const std::string& text,
+                                   vis_compare_metric_spec_t* spec,
+                                   std::string* error) {
+    if (spec == nullptr) {
+        set_error(error, "metric spec output is null");
+        return false;
+    }
+    size_t equals = text.find('=');
+    if (equals == std::string::npos || equals == 0 ||
+        equals + 1 >= text.size()) {
+        set_error(error, "metric must be formatted as name=regex");
+        return false;
+    }
+
+    vis_compare_metric_spec_t parsed;
+    parsed.name = text.substr(0, equals);
+    parsed.pattern = text.substr(equals + 1);
+    for (char c : parsed.name) {
+        bool ok = std::isalnum(static_cast<unsigned char>(c)) ||
+                  c == '_' || c == '-' || c == '.';
+        if (!ok) {
+            set_error(error,
+                      "metric name may only contain letters, digits, _, -, .");
+            return false;
+        }
+    }
+
+    try {
+        std::regex check(parsed.pattern);
+        (void)check;
+    } catch (const std::regex_error& e) {
+        set_error(error, std::string("invalid metric regex: ") + e.what());
+        return false;
+    }
+
+    *spec = parsed;
+    return true;
+}
+
+void vis_compare_capture_metrics(
+    const std::string& text,
+    const std::vector<vis_compare_metric_spec_t>& specs,
+    std::vector<vis_compare_metric_result_t>* results
+) {
+    if (results == nullptr) return;
+    results->clear();
+
+    for (const auto& spec : specs) {
+        vis_compare_metric_result_t result;
+        result.name = spec.name;
+        result.pattern = spec.pattern;
+        result.matched = false;
+        result.value = 0.0;
+
+        try {
+            std::regex re(spec.pattern);
+            std::smatch match;
+            if (std::regex_searchhtext, match, re) && match.size() >= 2) {
+                result.raw_value = match[1].str();
+                char* end = nullptr;
+                errno = 0;
+                double value = strtod(result.raw_value.c_str(), &end);
+                if (errno == 0 && std::isfinite(value) &&
+                    end != result.raw_value.c_str() &&
+                    end != nullptr && *end == '\0') {
+                    result.matched = true;
+                    result.value = value;
+                }
+            }
+        } catch (const std::regex_error&) {
+            result.matched = false;
+        }
+
+        results->push_back(result);
+    }
+}
+
 static void write_json_u32_array(std::ostringstream& out,
                                  const std::vector<uint32_t>& values) {
     out << "[";
@@ -237,6 +316,42 @@ static void write_json_u32_array(std::ostringstream& out,
         out << values[i];
     }
     out << "]";
+}
+
+static void write_json_metrics(
+    std::ostringstream& out,
+    const std::vector<vis_compare_metric_result_t>& metrics
+) {
+    out << "[";
+    for (size_t i = 0; i < metrics.size(); i++) {
+        const auto& m = metrics[i];
+        if (i != 0) out << ", ";
+        out << "{\"name\": \"" << json_escape(m.name)
+            << "\", \"regex\": \"" << json_escape(m.pattern)
+            << "\", \"matched\": " << (m.matched ? "true" : "false");
+        if (m.matched) {
+            out << ", \"value\": " << m.value
+                << ", \"raw_value\": \"" << json_escape(m.raw_value) << "\"";
+        } else {
+            out << ", \"value\": null, \"raw_value\": null";
+        }
+        out << "}";
+    }
+    out << "]";
+}
+
+static std::string markdown_cell_escape(const std::string& value) {
+    std::string out;
+    for (char c : value) {
+        if (c == '|') {
+            out += "\\|";
+        } else if (c == '\n' || c == '\r') {
+            out += ' ';
+        } else {
+            out += c;
+        }
+    }
+    return out;
 }
 
 std::string vis_compare_to_json(const vis_compare_report_t& report) {
@@ -254,6 +369,8 @@ std::string vis_compare_to_json(const vis_compare_report_t& report) {
             << json_escape(p.profile_source)
             << "\", \"attestation_path\": \""
             << json_escape(p.attestation_path)
+            << "\", \"captured_output_path\": \""
+            << json_escape(p.output_path)
             << "\", \"assigned_cpus\": ";
         write_json_u32_array(out, p.assigned_cpus);
         out << ", \"exit_code\": " << p.exit_code
@@ -262,7 +379,9 @@ std::string vis_compare_to_json(const vis_compare_report_t& report) {
             << "\", \"affinity_escape_count\": "
             << p.affinity_escape_count
             << ", \"warning_count\": " << p.warning_count
-            << "}";
+            << ", \"metrics\": ";
+        write_json_metrics(out, p.metrics);
+        out << "}";
         out << (i + 1 == report.profiles.size() ? "\n" : ",\n");
     }
     out << "    ],\n";
@@ -278,7 +397,7 @@ std::string vis_compare_to_markdown(const vis_compare_report_t& report) {
     out << "# VIS Compare AI Context\n\n";
     out << "Policy source: `" << report.policy_path << "`\n\n";
     out << "Workload: `" << report.workload << "`\n\n";
-    out << "## Profile Comparison\n\n";
+    out << "## Runtime Control Evidence\n\n";
     out << "| Profile | CPUs | Exit | Escapes | Duration | Verdict |\n";
     out << "|---|---|---:|---:|---:|---|\n";
     for (const auto& p : report.profiles) {
@@ -289,11 +408,38 @@ std::string vis_compare_to_markdown(const vis_compare_report_t& report) {
             << " | " << p.duration_ms << " ms"
             << " | " << p.verdict << " |\n";
     }
+    out << "\n## Application Metrics\n\n";
+    bool any_metrics = false;
+    for (const auto& p : report.profiles) {
+        if (!p.metrics.empty()) any_metrics = true;
+    }
+    if (!any_metrics) {
+        out << "No application metrics were requested.\n";
+    } else {
+        out << "| Profile | Metric | Matched | Value | Regex |\n";
+        out << "|---|---|---|---:|---|\n";
+        for (const auto& p : report.profiles) {
+            for (const auto& m : p.metrics) {
+                out << "| " << markdown_cell_escape(p.profile_source)
+                    << " | " << markdown_cell_escape(m.name)
+                    << " | " << (m.matched ? "yes" : "no")
+                    << " | ";
+                if (m.matched) {
+                    out << m.value;
+                } else {
+                    out << "n/a";
+                }
+                out << " | `" << markdown_cell_escape(m.pattern) << "` |\n";
+            }
+        }
+    }
     out << "\n## Recommendation\n\n";
     out << report.recommendation << "\n\n";
-    out << "Interpret this as runtime-control evidence. VIS Compare Lite "
-        << "does not yet parse application-level latency, FPS, tok/s, or "
-        << "domain-specific benchmark metrics.\n";
+    out << "Interpret this as runtime-control and optional application-metric "
+        << "evidence. VIS Compare does not know the semantic meaning of a "
+        << "metric; it only captures numeric values requested by the user.\n\n";
+    out << "Full captured profile output is available under the runs directory "
+        << "for optional review.\n";
     return out.str();
 }
 
