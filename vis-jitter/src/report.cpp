@@ -244,7 +244,7 @@ vis_report_t* vis_report_from_json(const char* /*json_path*/) {
 
 char* vis_report_sign(const vis_report_t* /*report*/,
                       const char*         /*private_key_path*/) {
-    // V1 stub — signing available in commercial tier only
+    // V1 stub — signed reports are planned for a later attestation layer.
     fprintf(stderr, "[vis-jitter] vis_report_sign: not available in open source V1\n");
     return nullptr;
 }
