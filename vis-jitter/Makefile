@@ -3,6 +3,7 @@
 #   make           — build vis-jitter
 #   make vis-doctor — build VIS Doctor
 #   make vis-run   — build VIS Run
+#   make vis-compare — build VIS Compare Lite
 #   make test      — build and run rootless tests
 #   make test-root — build and run the MSR/SMI test (requires sudo)
 #   make test-all  — run rootless tests, then root-required tests
@@ -35,6 +36,9 @@ DOCTOR_SRCS := $(SRC_DIR)/doctor_main.cpp \
 RUN_SRCS := $(SRC_DIR)/vis_run_main.cpp \
             $(SRC_DIR)/vis_run.cpp
 
+COMPARE_SRCS := $(SRC_DIR)/vis_compare_main.cpp \
+                $(SRC_DIR)/vis_compare.cpp
+
 # Header dependencies ensure recompilation when structs or APIs change.
 # Without these, make would happily link old .o files with new headers —
 # a silent source of measurement bugs.
@@ -44,17 +48,20 @@ HDRS := $(INC_DIR)/vis_jitter.hpp \
         $(INC_DIR)/histogram.hpp \
         $(INC_DIR)/report.hpp \
         $(INC_DIR)/doctor.hpp \
-        $(INC_DIR)/vis_run.hpp
+        $(INC_DIR)/vis_run.hpp \
+        $(INC_DIR)/vis_compare.hpp
 
 TARGET := vis-jitter
 DOCTOR_BIN := vis-doctor
 RUN_BIN := vis-run
+COMPARE_BIN := vis-compare
 TEST_SMI := test_smi_audit
 TEST_HIST := test_histogram
 TEST_REPORT := test_report_json
 TEST_API := test_public_api
 TEST_DOCTOR := test_doctor
 TEST_RUN := test_vis_run
+TEST_COMPARE := test_vis_compare
 
 # ---------------------------------------------------------------------------
 # Default target
@@ -71,11 +78,14 @@ $(DOCTOR_BIN): $(DOCTOR_SRCS) $(HDRS)
 $(RUN_BIN): $(RUN_SRCS) $(HDRS)
 	$(CXX) $(CXXFLAGS) -o $@ $(RUN_SRCS)
 
+$(COMPARE_BIN): $(COMPARE_SRCS) $(HDRS)
+	$(CXX) $(CXXFLAGS) -o $@ $(COMPARE_SRCS)
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 # Rootless tests are safe for local development and CI.
-test: $(TEST_HIST) $(TEST_REPORT) $(TEST_API) $(TEST_DOCTOR) $(TEST_RUN)
+test: $(TEST_HIST) $(TEST_REPORT) $(TEST_API) $(TEST_DOCTOR) $(TEST_RUN) $(TEST_COMPARE)
 	@echo "Running test_histogram..."
 	./$(TEST_HIST)
 	@echo ""
@@ -90,6 +100,9 @@ test: $(TEST_HIST) $(TEST_REPORT) $(TEST_API) $(TEST_DOCTOR) $(TEST_RUN)
 	@echo ""
 	@echo "Running test_vis_run..."
 	./$(TEST_RUN)
+	@echo ""
+	@echo "Running test_vis_compare..."
+	./$(TEST_COMPARE)
 
 test-root: $(TEST_SMI)
 	@echo ""
@@ -116,12 +129,15 @@ $(TEST_DOCTOR): $(TEST_DIR)/test_doctor.cpp $(SRC_DIR)/doctor.cpp $(SRC_DIR)/mea
 $(TEST_RUN): $(TEST_DIR)/test_vis_run.cpp $(SRC_DIR)/vis_run.cpp $(INC_DIR)/vis_run.hpp
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_DIR)/test_vis_run.cpp $(SRC_DIR)/vis_run.cpp
 
+$(TEST_COMPARE): $(TEST_DIR)/test_vis_compare.cpp $(SRC_DIR)/vis_compare.cpp $(INC_DIR)/vis_compare.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $(TEST_DIR)/test_vis_compare.cpp $(SRC_DIR)/vis_compare.cpp
+
 # ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
 
 clean:
-	rm -f $(TARGET) $(DOCTOR_BIN) $(RUN_BIN) $(TEST_SMI) $(TEST_HIST) $(TEST_REPORT) $(TEST_API) $(TEST_DOCTOR) $(TEST_RUN)
+	rm -f $(TARGET) $(DOCTOR_BIN) $(RUN_BIN) $(COMPARE_BIN) $(TEST_SMI) $(TEST_HIST) $(TEST_REPORT) $(TEST_API) $(TEST_DOCTOR) $(TEST_RUN) $(TEST_COMPARE)
 
 .PHONY: all test test-root test-all clean
 # ---------------------------------------------------------------------------
