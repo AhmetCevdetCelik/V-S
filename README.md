@@ -31,6 +31,37 @@ faster. Its claim is narrower and more useful:
 > Critical software should not run on hardware blindly. It should run with a
 > measured, explainable, and repeatable execution profile.
 
+## What works today
+
+VIS currently ships as a Linux/x86_64 prototype under `vis-jitter/`.
+
+- `vis-jitter` measures CPU jitter with `RDTSCP`, rejects SMI-contaminated
+  windows using `IA32_SMI_COUNT`, and emits terminal/JSON evidence.
+- `vis-doctor` scans the machine, ranks CPU candidates, detects SMT, CPU
+  governor, isolation, and HugePages signals, and writes an AI-readable
+  diagnosis.
+- `vis-run` reads Doctor policy, applies temporary workload CPU affinity, and
+  emits a runtime attestation.
+- `vis-compare` runs the same workload through VIS runtime profiles and can
+  capture user-defined metrics such as `score`, `tok_s`, `loop_hz`, or
+  `p99_ms`.
+
+VIS is not a malware detector. It can, however, turn unexplained runtime,
+latency, or throughput drift into reproducible evidence that may justify deeper
+debugging, performance analysis, or security review.
+
+Quick path:
+
+```bash
+cd vis-jitter
+make
+make test
+sudo modprobe msr
+sudo ./vis-doctor --scan --duration 30 --threshold 100 --output doctor.json --llm doctor.md
+./vis-run --policy doctor.json --dry-run -- /bin/true
+./vis-compare --policy doctor.json --metric score="score: ([0-9.]+)" -- ./your_program
+```
+
 ---
 
 ## Architecture
@@ -192,15 +223,23 @@ cd vis-jitter
 make vis-run vis-compare
 
 ./vis-compare --policy doctor.json \
+  --metric score="score: ([0-9.]+)" \
   --output compare.json \
   --llm compare.md \
   -- ./your_program
 ```
 
-The first version compares runtime-control evidence only: assigned CPUs, exit
-code, wall-clock duration, VIS Run verdict, affinity escapes, and warning count.
-It does not yet parse application-specific metrics such as FPS, token/s, or
-p99 request latency.
+VIS Compare always reports runtime-control evidence: assigned CPUs, exit code,
+wall-clock duration, VIS Run verdict, affinity escapes, and warning count. When
+`--metric name=regex` is provided, it also captures numeric values from the
+workload/`vis-run` output and records them beside each profile. VIS does not
+interpret the semantic meaning of a metric; it only compares user-requested
+numbers such as `score`, `tok_s`, `loop_hz`, or `p99_ms`.
+
+By default, per-profile output is captured under `vis-compare-runs/` and the
+terminal stays focused on the comparison summary. Use `--show-output` when you
+also want the captured output printed during the run. Full captured profile
+output is available under the runs directory for optional review.
 
 ---
 
@@ -216,7 +255,7 @@ should be captured before treating these numbers as final certification data.
 
 ### Run 1 — Baseline (60s, clean environment)
 
-**Hardware:** HP Victus Gaming Laptop 15-fa1xxx
+**Hardware:** HP Victus Gaming Laptop 15-fa1xxxx
 **CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
 **Core:** Core 2, SMT off, NUMA node 0
 **Note:** Standard kernel, no `isolcpus` applied. Baseline calibration — no deliberate interference.
@@ -259,212 +298,4 @@ should be captured before treating these numbers as final certification data.
 
 **Key insights:**
 - Zero contaminated SMI windows — measurement environment was clean
-- P50 through P99.99 all at 5.0 ns — the core is a noise-free island under standard conditions
-- The 4.9 µs max spike is OS scheduler interference, not SMI — expected without `isolcpus`
-
----
-
-### Run 2 — SMI Stress Test (300s, deliberate interference)
-
-**Hardware:** HP Victus Gaming Laptop 15-fa1xxx
-**CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
-**Core:** Core 2, SMT off, NUMA node 0
-**Note:** SMI events deliberately triggered during measurement to validate `full_window` rejection policy.
-**Duration:** 300 seconds | **Threshold:** 100 ns | **Workload:** Empty loop
-
-```text
-========================================
- vis-jitter report
-========================================
- Generated : 2026-05-07T02:31:50Z
- Report ID : 49c74c49-2959-45e7-aaf6-00004083d70c
-----------------------------------------
- System (detected)
-   Core        : 2
-   TSC freq.   : 4.800 GHz
-   NUMA node   : 0
-   SMT active  : no
-   TSC invar.  : yes
-   RDTSCP      : yes
-----------------------------------------
- SMI audit
-   Policy      : full_window
-   Windows     : 6 contaminated
-   MSR delta   : 6
-   Rejected    : 6,000,000 samples
-----------------------------------------
- Latency results
-   Accepted    : 1,886,000,000 samples
-   Core migr.  : 0 rejected
-   min         : 0.0 ns
-   p50         : 5.0 ns
-   p99         : 15.0 ns
-   p99.9       : 15.0 ns
-   p99.99      : 65.0 ns
-   max         : 5000.0 ns
-----------------------------------------
- VERDICT: PASS — P99 15.0 ns <= threshold 100.0 ns
-========================================
-```
-
-**Key insights:**
-- 6 contaminated SMI windows detected — 6,000,000 samples automatically rejected
-- Despite deliberate interference, P99 held at 15 ns — well within threshold
-- 1.886 billion clean samples accepted — statistically robust result across 5 minutes
-
----
-
-### Run 3 — SMI Stress Test (60s, repeated validation)
-
-**Hardware:** HP Victus Gaming Laptop 15-fa1xxx
-**CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
-**Core:** Core 2, SMT off, NUMA node 0
-**Note:** Second deliberate SMI interference run, shorter duration. Confirms rejection policy is consistent across runs.
-**Duration:** 60 seconds | **Threshold:** 100 ns | **Workload:** Empty loop
-
-```text
-========================================
- vis-jitter report
-========================================
- Generated : 2026-05-07T03:17:04Z
- Report ID : 43cca583-dfc6-467c-95b4-0000124c86b3
-----------------------------------------
- System (detected)
-   Core        : 2
-   TSC freq.   : 4.800 GHz
-   NUMA node   : 0
-   SMT active  : no
-   TSC invar.  : yes
-   RDTSCP      : yes
-----------------------------------------
- SMI audit
-   Policy      : full_window
-   Windows     : 4 contaminated
-   MSR delta   : 4
-   Rejected    : 4,000,000 samples
-----------------------------------------
- Latency results
-   Accepted    : 322,000,000 samples
-   Core migr.  : 0 rejected
-   min         : 0.0 ns
-   p50         : 5.0 ns
-   p99         : 15.0 ns
-   p99.9       : 65.0 ns
-   p99.99      : 65.0 ns
-   max         : 3220.0 ns
-----------------------------------------
- VERDICT: PASS — P99 15.0 ns <= threshold 100.0 ns
-========================================
-```
-
-**Key insights:**
-- 4 contaminated SMI windows detected — 4,000,000 samples rejected, report uncontaminated
-- P99 consistent with Run 2 at 15 ns — rejection policy produces repeatable results
-- P99.9 at 65 ns reflects OS scheduler noise without `isolcpus`, not SMI
-
----
-
-### Summary across all runs
-
-| Run | Duration | Contaminated windows | Rejected | P99 | P99.9 | Verdict |
-|---|---|---|---|---|---|---|
-| 1 — Baseline | 60s | 0 | 0 | 5.0 ns | 5.0 ns | PASS |
-| 2 — SMI stress | 300s | 6 | 6,000,000 | 15.0 ns | 15.0 ns | PASS |
-| 3 — SMI stress + | 60s | 4 | 4,000,000 | 15.0 ns | 65.0 ns | PASS |
-
-**Conclusion:** `vis-jitter` consistently detects and rejects SMI-contaminated windows across all runs. P99 remains below threshold regardless of interference. The `full_window` rejection policy is validated as both correct and repeatable on commodity hardware.
-
----
-
-### All-core exploratory scan — HP Victus 15-fa1xxx
-
-A 30-second exploratory scan was run across all 20 online logical CPUs on the
-same HP Victus system. This is not a certification dataset; it is an early
-machine-local comparison showing how VIS reports per-core cleanliness and
-throughput.
-
-Command:
-
-```bash
-for cpu in $(seq 0 19); do
-  sudo ./vis-jitter --cpu "$cpu" --duration 30 --threshold 100 --output "reports/core-${cpu}.json"
-done
-```
-
-Summary:
-
-| CPU range | Accepted samples | Contaminated windows | MSR delta | P99 | P99.9 | P99.99 | Verdict |
-|---|---:|---:|---:|---:|---:|---:|---|
-| 0–7, 9–11 | ~197M–198M | 0 | 0 | 15 ns | 15 ns | 15–25 ns | PASS |
-| 8 | 179M | 3 | 4 | 15 ns | 95 ns | 105 ns | PASS |
-| 12–19 | ~48M | 0 | 0 | 15 ns | 15 ns | 15 ns | PASS |
-
-Key observations:
-
-- Deliberate SMI interference was captured during the CPU 8 run: 3 contaminated windows, 4 total SMI counter increments, and 3,000,000 rejected samples.
-- All logical CPUs passed the P99 <= 100 ns threshold.
-- CPU 12–19 accepted far fewer samples in the same 30-second window, suggesting a lower-throughput core class on this hybrid CPU.
-- Clean cores produced very similar latency percentiles because V1 uses 10 ns histogram buckets and the baseline workload is an empty serialized loop.
-- `max = 5000 ns` should be read as "at or beyond the V1 histogram range"; exact overflow maxima are planned for a later report schema improvement.
-
-This scan demonstrates the next natural direction for VIS Doctor: compare all
-available CPUs, identify clean candidates, flag contaminated windows, and expose
-core-class behavior through measured evidence instead of guessing.
-
----
-
-### Controlled SMT sibling-load stress
-
-After VIS Doctor began producing sibling-aware primary CPU candidates, a bounded
-stress test was run to check whether busy SMT siblings changed the measured
-behavior. This test intentionally kept the sibling logical CPUs busy with
-`timeout` + `taskset` + `yes`, then measured CPU 0 and ran a 10-second Doctor
-scan under the same kind of background load.
-
-Safety note: this is a bounded stress test, not a thermal torture test. On
-laptops, keep durations short and watch fan/temperature behavior.
-
-Single-core comparison on CPU 0:
-
-| Scenario | Background load | Accepted samples | P50 | P99 | P99.9 | P99.99 | SMI windows | Verdict |
-|---|---|---:|---:|---:|---:|---:|---:|---|
-| Clean CPU 0 | none | 394M | 5 ns | 15 ns | 15 ns | 15 ns | 0 | PASS |
-| CPU 0 with sibling CPU 1 busy | `taskset -c 1 yes` | 338M | 15 ns | 15 ns | 15 ns | 15 ns | 0 | PASS |
-| CPU 0 with siblings 1,3,5,7,9,11 busy | bounded sibling load | 340M | 15 ns | 15 ns | 25 ns | 35 ns | 0 | PASS |
-
-Doctor scan under sibling-load:
-
-| CPU class | Accepted/s under stress | P99 | P99.9 | SMI windows | Class |
-|---|---:|---:|---:|---:|---|
-| Primary candidates 0,2,4,6,8,10 | ~5.7M | 15 ns | 15–25 ns | 0 | higher-throughput |
-| Busy sibling CPUs 1,3,5,7,9,11 | ~3.3M | 15 ns | 15 ns | 0 | higher-throughput |
-| CPUs 12–19 | ~1.6M | 15 ns | 15 ns | 0 | lower-throughput |
-
-Key observations:
-
-- The controlled sibling load did not break the P99 latency verdict.
-- No SMI-contaminated windows were observed.
-- Clean accepted-sample throughput dropped from 394M to ~338M–340M on CPU 0.
-- Tail latency moved under multi-sibling load: P99.9 rose from 15 ns to 25 ns and P99.99 rose to 35 ns.
-- VIS Doctor preserved the same primary recommendation: `0,2,4,6,8,10`, while keeping `12–19` in the lower-throughput class.
-
-This supports the VIS CPU policy design: SMT sibling sharing may not always
-break P99 latency, but it can reduce clean execution capacity and move tail
-latency. Strict runtime profiles should therefore prefer sibling-aware primary
-CPU candidates first, then treat the full clean logical CPU list as secondary
-evidence.
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE)
-
----
-
-## Status
-
-Early development. V1 (`vis-jitter`) is functional and tested on Linux x86-64.
-See [VIS Core V1 Notes](V1_NOTES.md) for completed scope, known limits, and
-validation commands.
-Contributions welcome.
+- P50 through P99.99 all
