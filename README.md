@@ -181,6 +181,29 @@ Planned hardening:
 
 ---
 
+## VIS Compare Lite
+
+VIS Compare Lite is the first small VIS Lab step. It runs the same workload
+through `vis-run` with the Doctor-recommended `primary` and `secondary` CPU
+sources, then summarizes the runtime evidence side by side.
+
+```bash
+cd vis-jitter
+make vis-run vis-compare
+
+./vis-compare --policy doctor.json \
+  --output compare.json \
+  --llm compare.md \
+  -- ./your_program
+```
+
+The first version compares runtime-control evidence only: assigned CPUs, exit
+code, wall-clock duration, VIS Run verdict, affinity escapes, and warning count.
+It does not yet parse application-specific metrics such as FPS, token/s, or
+p99 request latency.
+
+---
+
 ## Test Results
 
 Three runs were performed to validate both baseline determinism and SMI detection under deliberate interference.

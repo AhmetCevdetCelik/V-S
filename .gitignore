@@ -43,11 +43,13 @@
 /vis-jitter/vis-jitter
 /vis-jitter/vis-doctor
 /vis-jitter/vis-run
+/vis-jitter/vis-compare
 /vis-jitter/test_histogram
 /vis-jitter/test_report_json
 /vis-jitter/test_public_api
 /vis-jitter/test_doctor
 /vis-jitter/test_vis_run
+/vis-jitter/test_vis_compare
 /vis-jitter/test_smi_audit
 
 # Build directories
@@ -85,3 +87,6 @@ Testing/
 /vis-jitter/doctor*.json
 /vis-jitter/doctor*.md
 /vis-jitter/run-attestation*.json
+/vis-jitter/compare*.json
+/vis-jitter/compare*.md
+/vis-jitter/vis-compare-runs/
