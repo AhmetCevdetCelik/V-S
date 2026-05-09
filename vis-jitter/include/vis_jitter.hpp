@@ -70,19 +70,12 @@ struct vis_detected_t {
     bool     tsc_invariant;         /**< Does TSC remain constant across C-state transitions? */
     bool     rdtscp_supported;      /**< CPUID indicates RDTSCP instruction support */
 };
-/**
- * System properties DETECTED at runtime by the tool.
- * These values are measured and verified — they are NOT user claims.
- * Reported in `system.detected` block of the JSON report.
- * 
- * NOTE: This distinction (detected vs asserted) is the architectural core of VIS.
- * It turns a measurement tool into a certification authority.
- */
+
 /**
  * System properties ASSERTED by the user (e.g., via CLI flags).
  * These values are NOT verified by vis-jitter; they represent the user's claim
- * about the environment. The commercial certification layer verifies them
- * through a kernel module and elevates them to detected status.
+ * about the environment. Keeping detected and asserted facts separate prevents
+ * reports from mixing measurements with operator-provided context.
  * Reported in `system.asserted` block of the JSON report.
  */
 struct vis_asserted_t {
@@ -100,11 +93,11 @@ struct vis_asserted_t {
  * Policy: full_window
  *   - At the start and end of each measurement window, IA32_SMI_COUNT MSR is read.
  *   - If the counter increased, the ENTIRE window is discarded.
- *   - This conservative approach produces a provably clean dataset suitable
- *     for regulatory certification.
+ *   - This conservative approach keeps the accepted dataset clean enough for
+ *     audit and later comparison.
  * 
- * DESIGN DECISION: I chose full-window rejection over partial rejection.
- * Losing 1M samples is better than lying with statistics. Regulatory compliance demands this.
+ * Design decision: V1 prefers full-window rejection over partial rejection.
+ * Losing samples is safer than keeping data from a contaminated timing window.
  */
 struct vis_smi_audit_t {
     uint64_t msr_start;             /**< SMI count at measurement start */
@@ -148,8 +141,7 @@ struct vis_histogram_t {
  *
  * Contains both the raw histogram and the percentile breakdown.
  * `determinism_pass` is true iff P99 <= threshold_ns.
- * In the open-source tier the threshold is user-defined;
- * in the commercial tier it is set and signed by the VIS authority.
+ * The threshold is user-defined in V1.
  */
 struct vis_results_t {
     uint64_t        samples_accepted;          /**< Accepted sample count */
@@ -159,9 +151,6 @@ struct vis_results_t {
     bool            determinism_pass;          /**< true if P99 <= threshold_ns */
     double          threshold_ns;              /**< Threshold used for verdict */
 };
-// NOTE: In open-source tier, threshold is user-defined.
-    // In commercial tier, it's set and signed by VIS authority.
-
 
 /**
  * Top-level report structure.
