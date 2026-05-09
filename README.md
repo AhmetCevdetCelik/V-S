@@ -31,6 +31,37 @@ faster. Its claim is narrower and more useful:
 > Critical software should not run on hardware blindly. It should run with a
 > measured, explainable, and repeatable execution profile.
 
+## What works today
+
+VIS currently ships as a Linux/x86_64 prototype under `vis-jitter/`.
+
+- `vis-jitter` measures CPU jitter with `RDTSCP`, rejects SMI-contaminated
+  windows using `IA32_SMI_COUNT`, and emits terminal/JSON evidence.
+- `vis-doctor` scans the machine, ranks CPU candidates, detects SMT, CPU
+  governor, isolation, and HugePages signals, and writes an AI-readable
+  diagnosis.
+- `vis-run` reads Doctor policy, applies temporary workload CPU affinity, and
+  emits a runtime attestation.
+- `vis-compare` runs the same workload through VIS runtime profiles and can
+  capture user-defined metrics such as `score`, `tok_s`, `loop_hz`, or
+  `p99_ms`.
+
+VIS is not a malware detector. It can, however, turn unexplained runtime,
+latency, or throughput drift into reproducible evidence that may justify deeper
+debugging, performance analysis, or security review.
+
+Quick path:
+
+```bash
+cd vis-jitter
+make
+make test
+sudo modprobe msr
+sudo ./vis-doctor --scan --duration 30 --threshold 100 --output doctor.json --llm doctor.md
+./vis-run --policy doctor.json --dry-run -- /bin/true
+./vis-compare --policy doctor.json --metric score="score: ([0-9.]+)" -- ./your_program
+```
+
 ---
 
 ## Architecture
@@ -192,15 +223,23 @@ cd vis-jitter
 make vis-run vis-compare
 
 ./vis-compare --policy doctor.json \
+  --metric score="score: ([0-9.]+)" \
   --output compare.json \
   --llm compare.md \
   -- ./your_program
 ```
 
-The first version compares runtime-control evidence only: assigned CPUs, exit
-code, wall-clock duration, VIS Run verdict, affinity escapes, and warning count.
-It does not yet parse application-specific metrics such as FPS, token/s, or
-p99 request latency.
+VIS Compare always reports runtime-control evidence: assigned CPUs, exit code,
+wall-clock duration, VIS Run verdict, affinity escapes, and warning count. When
+`--metric name=regex` is provided, it also captures numeric values from the
+workload/`vis-run` output and records them beside each profile. VIS does not
+interpret the semantic meaning of a metric; it only compares user-requested
+numbers such as `score`, `tok_s`, `loop_hz`, or `p99_ms`.
+
+By default, per-profile output is captured under `vis-compare-runs/` and the
+terminal stays focused on the comparison summary. Use `--show-output` when you
+also want the captured output printed during the run. Full captured profile
+output is available under the runs directory for optional review.
 
 ---
 
