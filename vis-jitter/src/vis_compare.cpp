@@ -288,7 +288,7 @@ void vis_compare_capture_metrics(
         try {
             std::regex re(spec.pattern);
             std::smatch match;
-            if (std::regex_searchhtext, match, re) && match.size() >= 2) {
+            if (std::regex_search(text, match, re) && match.size() >= 2) {
                 result.raw_value = match[1].str();
                 char* end = nullptr;
                 errno = 0;
