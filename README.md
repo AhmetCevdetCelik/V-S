@@ -2,6 +2,10 @@
 
 > *Reconciling Software and Silicon.*
 
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+![Platform: Linux/x86_64](https://img.shields.io/badge/platform-Linux%2Fx86--64-blue)
+![Language: C++17](https://img.shields.io/badge/language-C%2B%2B17-blue)
+
 ## Manifesto
 
 **The Great Decoupling**
@@ -18,6 +22,24 @@ VIS is the functional proof of this philosophy on the x86 architecture. By regai
 
 ---
 
+## Contents
+
+- [What is VIS?](#what-is-vis)
+- [Who should try VIS?](#who-should-try-vis)
+- [What works today](#what-works-today)
+- [Call for testing](#call-for-testing)
+- [Architecture](#architecture)
+- [Roadmap](#roadmap)
+- [vis-jitter](#vis-jitter)
+- [VIS Doctor](#vis-doctor)
+- [VIS Run](#vis-run)
+- [VIS Compare Lite](#vis-compare-lite)
+- [Test Results](#test-results)
+- [License](#license)
+- [Status](#status)
+
+---
+
 ## What is VIS?
 
 VIS is a deterministic performance platform for critical software on real CPU
@@ -30,6 +52,17 @@ faster. Its claim is narrower and more useful:
 
 > Critical software should not run on hardware blindly. It should run with a
 > measured, explainable, and repeatable execution profile.
+
+## Who should try VIS?
+
+VIS is most relevant if you care about evidence for low-level runtime behavior:
+
+- Linux performance and systems programmers
+- low-latency and HFT engineers
+- robotics, drone, and embedded Linux developers
+- inference/runtime benchmarking teams
+- database, storage, and server operators investigating latency drift
+- security and supply-chain investigators looking for reproducible performance evidence
 
 ## What works today
 
@@ -269,6 +302,9 @@ should be captured before treating these numbers as final certification data.
 
 ### Run 1 — Baseline (60s, clean environment)
 
+<details>
+<summary><b>Expand raw run output and environment notes</b></summary>
+
 **Hardware:** HP Victus Gaming Laptop 15-fa1xxx
 **CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
 **Core:** Core 2, SMT off, NUMA node 0
@@ -310,6 +346,8 @@ should be captured before treating these numbers as final certification data.
 ========================================
 ```
 
+</details>
+
 **Key insights:**
 - Zero contaminated SMI windows — measurement environment was clean
 - P50 through P99.99 all at 5.0 ns — the core is a noise-free island under standard conditions
@@ -318,6 +356,9 @@ should be captured before treating these numbers as final certification data.
 ---
 
 ### Run 2 — SMI Stress Test (300s, deliberate interference)
+
+<details>
+<summary><b>Expand raw run output and environment notes</b></summary>
 
 **Hardware:** HP Victus Gaming Laptop 15-fa1xxx
 **CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
@@ -360,6 +401,8 @@ should be captured before treating these numbers as final certification data.
 ========================================
 ```
 
+</details>
+
 **Key insights:**
 - 6 contaminated SMI windows detected — 6,000,000 samples automatically rejected
 - Despite deliberate interference, P99 held at 15 ns — well within threshold
@@ -368,6 +411,9 @@ should be captured before treating these numbers as final certification data.
 ---
 
 ### Run 3 — SMI Stress Test (60s, repeated validation)
+
+<details>
+<summary><b>Expand raw run output and environment notes</b></summary>
 
 **Hardware:** HP Victus Gaming Laptop 15-fa1xxx
 **CPU:** Intel Core (Alder Lake / Raptor Lake) @ 4.80 GHz
@@ -409,6 +455,8 @@ should be captured before treating these numbers as final certification data.
  VERDICT: PASS — P99 15.0 ns <= threshold 100.0 ns
 ========================================
 ```
+
+</details>
 
 **Key insights:**
 - 4 contaminated SMI windows detected — 4,000,000 samples rejected, report uncontaminated
