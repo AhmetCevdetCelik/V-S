@@ -62,6 +62,20 @@ sudo ./vis-doctor --scan --duration 30 --threshold 100 --output doctor.json --ll
 ./vis-compare --policy doctor.json --metric score="score: ([0-9.]+)" -- ./your_program
 ```
 
+## Call for testing
+
+VIS needs reports from different Linux/x86_64 machines: laptops, desktops,
+workstations, servers, robotics companion computers, and low-latency systems.
+If you want to help, run the community test commands and open a Machine Report
+issue.
+
+- Guide: [docs/community-testing.md](docs/community-testing.md)
+- Share text: [docs/share.md](docs/share.md)
+- Issue type: `Machine Report`
+
+Please review reports before posting and remove hostnames, usernames, private
+paths, serial numbers, or other identifiers you do not want public.
+
 ---
 
 ## Architecture
