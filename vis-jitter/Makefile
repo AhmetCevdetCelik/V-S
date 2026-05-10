@@ -7,6 +7,7 @@
 #   make test      — build and run rootless tests
 #   make test-root — build and run the MSR/SMI test (requires sudo)
 #   make test-all  — run rootless tests, then root-required tests
+#   make lint      — run rootless formatting checks for changed C++ files
 #   make clean     — remove build artifacts
 
 CXX      := g++
@@ -133,13 +134,27 @@ $(TEST_COMPARE): $(TEST_DIR)/test_vis_compare.cpp $(SRC_DIR)/vis_compare.cpp $(I
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_DIR)/test_vis_compare.cpp $(SRC_DIR)/vis_compare.cpp
 
 # ---------------------------------------------------------------------------
+# Lint / quality checks
+# ---------------------------------------------------------------------------
+
+format-check:
+	../scripts/check-format.sh
+
+cppcheck:
+	../scripts/run-cppcheck.sh
+
+lint: format-check
+
+lint-extra: lint cppcheck
+
+# ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
 
 clean:
 	rm -f $(TARGET) $(DOCTOR_BIN) $(RUN_BIN) $(COMPARE_BIN) $(TEST_SMI) $(TEST_HIST) $(TEST_REPORT) $(TEST_API) $(TEST_DOCTOR) $(TEST_RUN) $(TEST_COMPARE)
 
-.PHONY: all test test-root test-all clean
+.PHONY: all test test-root test-all format-check cppcheck lint lint-extra clean
 # ---------------------------------------------------------------------------
 # Why no install target?
 # V1 is single-binary, single-purpose. No system-wide installation needed.
