@@ -89,6 +89,7 @@ Quick path:
 cd vis-jitter
 make
 make test
+make lint
 sudo modprobe msr
 sudo ./vis-doctor --scan --duration 30 --threshold 100 --output doctor.json --llm doctor.md
 ./vis-run --policy doctor.json --dry-run -- /bin/true
@@ -161,7 +162,7 @@ Existing tools like `cyclictest` measure OS scheduling jitter. `vis-jitter` goes
 
 ```bash
 # Dependencies
-sudo apt install build-essential libnuma-dev
+sudo apt install build-essential libnuma-dev clang-format cppcheck
 
 # Load MSR module
 sudo modprobe msr
@@ -169,6 +170,7 @@ sudo modprobe msr
 # Build
 cd vis-jitter
 make
+make lint
 
 # Run (requires root for MSR access)
 sudo ./vis-jitter --cpu 2 --duration 60 --threshold 100

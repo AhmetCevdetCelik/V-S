@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  vis-jitter:
+    name: vis-jitter rootless build and tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libnuma-dev clang-format
+
+      - name: Build
+        run: make -C vis-jitter
+
+      - name: Lint
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            export VIS_FORMAT_BASE="origin/${{ github.base_ref }}"
+          else
+            export VIS_FORMAT_BASE="HEAD~1"
+          fi
+          make -C vis-jitter lint
+
+      - name: Rootless tests
+        run: make -C vis-jitter test
+
+      - name: Explain skipped hardware validation
+        run: |
+          echo "Skipping make test-root in hosted CI."
+          echo "MSR/SMI validation needs real hardware privileges and should be run manually or on a self-hosted runner."

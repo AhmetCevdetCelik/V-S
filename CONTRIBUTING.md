@@ -24,11 +24,14 @@ Local development:
 
 - Install the documented build dependencies before compiling `vis-jitter`.
 - Build with `make -C vis-jitter`.
+- Run lightweight quality checks on changed C++ files with `make -C vis-jitter lint`.
+- Optional broader static analysis can be run with `make -C vis-jitter lint-extra` when `cppcheck` is installed.
 - Run rootless test binaries directly when possible:
   - `make -C vis-jitter test_histogram test_report_json`
   - `./vis-jitter/test_histogram`
   - `./vis-jitter/test_report_json`
 - Run the full `make -C vis-jitter test` only when you intend to use `sudo`, because `test_smi_audit` needs MSR access.
+- Optional local hook examples are documented in [docs/local-hooks.md](docs/local-hooks.md).
 - Do not commit generated binaries, local reports, editor files, or cache directories.
 
 Pull request expectations:
@@ -68,6 +71,7 @@ Verification rules:
 - Run the narrowest meaningful checks for the files changed.
 - For documentation-only changes, run text searches that prove the requested spelling or policy is consistent.
 - For `vis-jitter` build or source changes, run `make -C vis-jitter` when dependencies are available.
+- For C++ source or header changes, run `make -C vis-jitter lint` when `clang-format` is available. Use `VIS_FORMAT_ALL=1 make -C vis-jitter lint` only when intentionally checking the whole C++ tree.
 - Run rootless tests directly when possible.
 - Do not run sudo-required tests unless the user explicitly approves the elevated workflow.
 - Report any skipped check with the reason.
