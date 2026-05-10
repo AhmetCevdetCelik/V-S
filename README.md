@@ -71,8 +71,8 @@ VIS currently ships as a Linux/x86_64 prototype under `vis-jitter/`.
 - `vis-jitter` measures CPU jitter with `RDTSCP`, rejects SMI-contaminated
   windows using `IA32_SMI_COUNT`, and emits terminal/JSON evidence.
 - `vis-doctor` scans the machine, ranks CPU candidates, detects SMT, CPU
-  governor, isolation, and HugePages signals, and writes an AI-readable
-  diagnosis.
+  governor, isolation, HugePages, environment mode, and hardware evidence
+  quality, then writes an AI-readable diagnosis.
 - `vis-run` reads Doctor policy, applies temporary workload CPU affinity, and
   emits a runtime attestation.
 - `vis-compare` runs the same workload through VIS runtime profiles and can
@@ -210,6 +210,9 @@ sudo ./vis-doctor --scan --duration 30 --threshold 100 --output doctor.json --ll
 The Markdown output is designed to be pasted into an AI assistant. VIS Doctor
 V1.3 is advisory only: it explains, ranks, and recommends validation commands;
 it does not change CPU, IRQ, governor, isolation, or memory settings.
+It also reports whether the current environment looks like bare metal,
+virtualized, containerized, or unknown, and marks hardware evidence as strong,
+partial, limited, or unavailable.
 
 ---
 
