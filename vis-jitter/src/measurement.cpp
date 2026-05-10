@@ -20,11 +20,15 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <atomic>
 #include <cpuid.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <sched.h>
 #include <numa.h>
+#ifdef __linux__
+#include <sys/random.h>
+#endif
 
 // ---------------------------------------------------------------------------
 // Internal: RDTSCP inline
@@ -321,7 +325,7 @@ vis_status_t vis_measure(
         return vis_status_t::VIS_ERR_MSR;
     }
 
-    static double window_deltas[VIS_WINDOW_SIZE];
+    thread_local double window_deltas[VIS_WINDOW_SIZE];
 
     struct timespec ts_start, ts_now;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
@@ -406,15 +410,83 @@ vis_status_t vis_measure(
     return vis_status_t::VIS_OK;
 }
 
+static bool fill_random_bytes(uint8_t* bytes, size_t count) {
+    if (bytes == nullptr) {
+        return false;
+    }
+
+#ifdef __linux__
+    size_t offset = 0;
+    while (offset < count) {
+        ssize_t n = getrandom(bytes + offset, count - offset, 0);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (n == 0) {
+            break;
+        }
+        offset += static_cast<size_t>(n);
+    }
+    if (offset == count) {
+        return true;
+    }
+#endif
+
+    static std::atomic<uint64_t> fallback_counter{0};
+    uint32_t aux = 0;
+    uint64_t tsc = rdtscp(&aux);
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    uint64_t counter = fallback_counter.fetch_add(1, std::memory_order_relaxed);
+
+    uint64_t sec_bits = static_cast<uint64_t>(ts.tv_sec) << 32;
+    uint64_t nsec_bits = static_cast<uint64_t>(ts.tv_nsec);
+    uint64_t pid_bits = static_cast<uint64_t>(getpid()) << 32;
+    uint64_t aux_bits = static_cast<uint64_t>(aux) << 16;
+    uint64_t seed_a = tsc ^ sec_bits ^ nsec_bits;
+    uint64_t seed_b = pid_bits ^ aux_bits ^ counter;
+
+    memcpy(bytes, &seed_a, count < sizeof(seed_a) ? count : sizeof(seed_a));
+    if (count > sizeof(seed_a)) {
+        size_t remaining = count - sizeof(seed_a);
+        memcpy(bytes + sizeof(seed_a), &seed_b,
+               remaining < sizeof(seed_b) ? remaining : sizeof(seed_b));
+    }
+    return true;
+}
+
 static void generate_uuid(char* buf, size_t buf_size) {
-    snprintf(buf, buf_size,
-        "%08x-%04x-4%03x-%04x-%012x",
-        static_cast<unsigned int>(rand()),
-        static_cast<unsigned int>(rand() & 0xffff),
-        static_cast<unsigned int>(rand() & 0x0fff),
-        static_cast<unsigned int>((rand() & 0x3fff) | 0x8000),
-        static_cast<unsigned int>(rand())
-    );
+    uint8_t bytes[16] = {};
+    fill_random_bytes(bytes, sizeof(bytes));
+
+    bytes[6] = static_cast<uint8_t>((bytes[6] & 0x0f) | 0x40);
+    bytes[8] = static_cast<uint8_t>((bytes[8] & 0x3f) | 0x80);
+
+    uint32_t time_low =
+        (static_cast<uint32_t>(bytes[0]) << 24) |
+        (static_cast<uint32_t>(bytes[1]) << 16) |
+        (static_cast<uint32_t>(bytes[2]) << 8) |
+        static_cast<uint32_t>(bytes[3]);
+    uint16_t time_mid =
+        static_cast<uint16_t>((bytes[4] << 8) | bytes[5]);
+    uint16_t time_hi =
+        static_cast<uint16_t>((bytes[6] << 8) | bytes[7]);
+    uint16_t clock_seq =
+        static_cast<uint16_t>((bytes[8] << 8) | bytes[9]);
+    uint64_t node =
+        (static_cast<uint64_t>(bytes[10]) << 40) |
+        (static_cast<uint64_t>(bytes[11]) << 32) |
+        (static_cast<uint64_t>(bytes[12]) << 24) |
+        (static_cast<uint64_t>(bytes[13]) << 16) |
+        (static_cast<uint64_t>(bytes[14]) << 8) |
+        static_cast<uint64_t>(bytes[15]);
+
+    snprintf(buf, buf_size, "%08x-%04x-%04x-%04x-%012llx",
+             time_low, time_mid, time_hi, clock_seq,
+             static_cast<unsigned long long>(node));
 }
 
 static void generate_timestamp(char* buf, size_t buf_size) {
@@ -450,7 +522,6 @@ vis_status_t vis_jitter_run(
     strncpy(report->generator, "vis-jitter " VIS_JITTER_VERSION,
             sizeof(report->generator) - 1);
 
-    srand(static_cast<unsigned>(time(nullptr)));
     generate_uuid(report->report_id, sizeof(report->report_id));
     generate_timestamp(report->generated_at, sizeof(report->generated_at));
 
@@ -484,11 +555,10 @@ vis_status_t vis_jitter_run(
 // ---------------------------------------------------------------------------
 // D E S I G N   N O T E S
 // ---------------------------------------------------------------------------
-// 1. Why static window_deltas instead of dynamic allocation?
-//    A 1M-element double array is ~8 MB. On the stack, this would blow
-//    the default Linux stack (8 MB). Static moves it to the data segment.
-//    It's a deliberate trade-off: not thread-safe, but vis-jitter is
-//    single-threaded by design.
+// 1. Why thread_local window_deltas instead of stack allocation?
+//    A 1M-element double array is ~8 MB. On the stack, this would risk
+//    exhausting the default Linux thread stack. thread_local keeps the public
+//    API safe for concurrent calls while avoiding per-window heap churn.
 //
 // 2. Why serialization before AND after the workload?
 //    Without the second CPUID, the next iteration's RDTSCP could be

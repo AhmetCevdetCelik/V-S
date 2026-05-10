@@ -7,7 +7,7 @@
 #   make test      — build and run rootless tests
 #   make test-root — build and run the MSR/SMI test (requires sudo)
 #   make test-all  — run rootless tests, then root-required tests
-#   make lint      — run rootless formatting checks for changed C++ files
+#   make lint      — run rootless lightweight quality checks
 #   make clean     — remove build artifacts
 
 CXX      := g++

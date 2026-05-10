@@ -24,7 +24,7 @@ Local development:
 
 - Install the documented build dependencies before compiling `vis-jitter`.
 - Build with `make -C vis-jitter`.
-- Run lightweight quality checks on changed C++ files with `make -C vis-jitter lint`.
+- Run lightweight quality checks with `make -C vis-jitter lint`.
 - Optional broader static analysis can be run with `make -C vis-jitter lint-extra` when `cppcheck` is installed.
 - Run rootless test binaries directly when possible:
   - `make -C vis-jitter test_histogram test_report_json`

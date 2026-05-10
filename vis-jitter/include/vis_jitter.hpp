@@ -232,7 +232,7 @@ char* vis_report_to_json(const vis_report_t* report);
  * Load a report from a JSON file (for offline analysis and comparison).
  *
  * @param json_path  Path to the .json report file.
- * @return           Newly allocated vis_report_t. Caller must delete it.
+ * @return           Newly allocated vis_report_t. Caller must free() it.
  *                   Returns nullptr if parsing fails.
  */
 vis_report_t* vis_report_from_json(const char* json_path);
@@ -249,8 +249,8 @@ void vis_report_print_summary(const vis_report_t* report);
 /**
  * Sign a report with an Ed25519 private key.
  *
- * STUB in V1 – always returns nullptr.
- * Available only in the commercial certification tier.
+ * STUB in V1 — always returns nullptr. Signed attestations are planned for a
+ * later report layer.
  *
  * @param report           Report to sign.
  * @param private_key_path Path to an Ed25519 PEM private key file.
