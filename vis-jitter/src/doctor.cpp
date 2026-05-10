@@ -15,9 +15,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <cpuid.h>
 #include <fstream>
 #include <set>
 #include <sstream>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
@@ -50,6 +52,99 @@ static uint64_t read_u64(const std::string& path) {
     unsigned long long value = strtoull(text.c_str(), &end, 10);
     if (errno != 0 || end == text.c_str()) return 0;
     return static_cast<uint64_t>(value);
+}
+
+static bool path_exists(const std::string& path) {
+    struct stat st;
+    return stat(path.c_str(), &st) == 0;
+}
+
+static bool text_contains(const std::string& text,
+                          const std::string& needle) {
+    return text.find(needle) != std::string::npos;
+}
+
+static bool cpuid_rdtscp_supported() {
+    uint32_t eax = 0;
+    uint32_t ebx = 0;
+    uint32_t ecx = 0;
+    uint32_t edx = 0;
+    return __get_cpuid(0x80000001, &eax, &ebx, &ecx, &edx) &&
+        ((edx & (1u << 27)) != 0);
+}
+
+static bool msr_device_available_for_any_cpu() {
+    return path_exists("/dev/cpu/0/msr");
+}
+
+static bool container_detected() {
+    if (path_exists("/.dockerenv") || path_exists("/run/.containerenv")) {
+        return true;
+    }
+
+    std::string cgroup = read_text("/proc/1/cgroup");
+    return text_contains(cgroup, "docker") ||
+        text_contains(cgroup, "kubepods") ||
+        text_contains(cgroup, "containerd") ||
+        text_contains(cgroup, "lxc");
+}
+
+static bool hypervisor_detected() {
+    return text_contains(read_text("/proc/cpuinfo"), "hypervisor");
+}
+
+static vis_doctor_environment_t detect_environment() {
+    vis_doctor_environment_t env{};
+    env.root_user = geteuid() == 0;
+    env.msr_device_available = msr_device_available_for_any_cpu();
+    env.rdtscp_supported = cpuid_rdtscp_supported();
+    env.hypervisor_detected = hypervisor_detected();
+    env.container_detected = container_detected();
+
+    if (env.container_detected) {
+        env.mode = "container";
+        env.limitations.push_back(
+            "Containerized environments may hide host CPU, MSR, and scheduler evidence.");
+    } else if (env.hypervisor_detected) {
+        env.mode = "virtualized";
+        env.limitations.push_back(
+            "Virtualized environments may expose emulated or filtered hardware evidence.");
+    } else {
+        env.mode = "bare_metal";
+    }
+
+    if (!env.root_user) {
+        env.limitations.push_back(
+            "Current process is not root; MSR-backed SMI scans may require sudo or CAP_SYS_RAWIO.");
+    }
+    if (!env.msr_device_available) {
+        env.limitations.push_back(
+            "MSR device is not available; load the msr module and run privileged scans for SMI evidence.");
+    }
+    if (!env.rdtscp_supported) {
+        env.limitations.push_back(
+            "RDTSCP is not available; VIS Core jitter measurement cannot use its preferred timing path.");
+    }
+
+    if (env.mode == "bare_metal" && env.root_user &&
+        env.msr_device_available && env.rdtscp_supported) {
+        env.evidence_quality = "strong";
+    } else if (env.mode == "bare_metal" && env.rdtscp_supported) {
+        env.evidence_quality = "partial";
+    } else if (env.rdtscp_supported) {
+        env.evidence_quality = "limited";
+    } else {
+        env.evidence_quality = "unavailable";
+    }
+
+    env.reasons.push_back("mode=" + env.mode);
+    env.reasons.push_back(std::string("root_user=") +
+                          (env.root_user ? "yes" : "no"));
+    env.reasons.push_back(std::string("msr_device_available=") +
+                          (env.msr_device_available ? "yes" : "no"));
+    env.reasons.push_back(std::string("rdtscp_supported=") +
+                          (env.rdtscp_supported ? "yes" : "no"));
+    return env;
 }
 
 static bool cpu_dir_id(const std::string& name, uint32_t* out) {
@@ -158,6 +253,15 @@ static std::string join_cpus(const std::vector<uint32_t>& cpus) {
     for (size_t i = 0; i < cpus.size(); i++) {
         if (i != 0) out += ",";
         out += std::to_string(cpus[i]);
+    }
+    return out.empty() ? "none" : out;
+}
+
+static std::string join_strings(const std::vector<std::string>& values) {
+    std::string out;
+    for (size_t i = 0; i < values.size(); i++) {
+        if (i != 0) out += ", ";
+        out += values[i];
     }
     return out.empty() ? "none" : out;
 }
@@ -298,6 +402,19 @@ static void add_warning_once(std::vector<std::string>* warnings,
 static void add_environment_recommendations(vis_doctor_report_t* report) {
     if (report == nullptr) return;
 
+    if (report->environment.evidence_quality == "limited" ||
+        report->environment.evidence_quality == "unavailable") {
+        add_recommendation(report, "safe",
+            "Interpret hardware evidence carefully in this environment.",
+            "VIS detected limited access to hardware-level evidence.",
+            "Virtualized, containerized, or restricted environments can hide or filter MSR, SMI, and topology signals.",
+            "Use VIS reports as runtime evidence for this environment, not as full bare-metal hardware proof.",
+            "Repeat the same scan on bare metal or a trusted self-hosted runner when hardware proof matters.",
+            "Assuming cloud/container evidence is equivalent to bare-metal evidence can lead to wrong placement decisions.",
+            "Clearer separation between runtime behavior evidence and hardware-level evidence.",
+            "cat /proc/cpuinfo | grep -i hypervisor; test -e /.dockerenv; test -e /dev/cpu/0/msr");
+    }
+
     if (report->machine.smt_active) {
         add_recommendation(report, "advanced",
             "Account for SMT sibling noise before pinning critical work.",
@@ -364,6 +481,7 @@ int vis_doctor_inspect(vis_doctor_report_t* report) {
     }
 
     report->machine.generated_at = now_iso8601();
+    report->environment = detect_environment();
     report->machine.smt_active =
         read_text("/sys/devices/system/cpu/smt/active") == "1";
     report->machine.isolated_cpus = read_text("/sys/devices/system/cpu/isolated");
@@ -452,6 +570,25 @@ void vis_doctor_analyze(vis_doctor_report_t* report) {
     report->findings.clear();
     report->recommendations.clear();
     report->runtime_policy = vis_doctor_runtime_policy_t{};
+
+    if (report->environment.mode != "bare_metal") {
+        report->findings.push_back({"warning", "environment",
+            "Hardware evidence is limited in this environment.",
+            "mode=" + report->environment.mode +
+                ", quality=" + report->environment.evidence_quality,
+            {}});
+        add_warning_once(&report->runtime_policy.warnings,
+                         "limited_hardware_evidence");
+    } else if (report->environment.evidence_quality != "strong") {
+        report->findings.push_back({"info", "environment",
+            "Hardware evidence is not fully available yet.",
+            "quality=" + report->environment.evidence_quality +
+                ", root=" + (report->environment.root_user ? std::string("yes") : std::string("no")) +
+                ", msr=" + (report->environment.msr_device_available ? std::string("yes") : std::string("no")),
+            {}});
+        add_warning_once(&report->runtime_policy.warnings,
+                         "partial_hardware_evidence");
+    }
 
     if (report->machine.smt_active) {
         report->findings.push_back({"info", "cpu_topology",
@@ -640,6 +777,11 @@ void vis_doctor_print_summary(const vis_doctor_report_t* report) {
            report->machine.smt_active ? "yes" : "no",
            report->machine.isolated_cpus.empty() ? "none" : report->machine.isolated_cpus.c_str(),
            report->machine.nohz_full_cpus.empty() ? "none" : report->machine.nohz_full_cpus.c_str());
+    printf("Environment: %s | evidence: %s | MSR: %s | RDTSCP: %s\n",
+           report->environment.mode.c_str(),
+           report->environment.evidence_quality.c_str(),
+           report->environment.msr_device_available ? "yes" : "no",
+           report->environment.rdtscp_supported ? "yes" : "no");
 
     if (report->scan_ran) {
         printf("Primary candidate CPUs: %s\n", join_cpus(primary).c_str());
@@ -677,6 +819,31 @@ std::string vis_doctor_to_json(const vis_doctor_report_t* report) {
     out << "      \"nohz_full_cpus\": \"" << json_escape(report->machine.nohz_full_cpus) << "\",\n";
     out << "      \"hugepages_total\": " << report->machine.hugepages_total << ",\n";
     out << "      \"hugepages_free\": " << report->machine.hugepages_free << "\n";
+    out << "    },\n";
+    out << "    \"environment\": {\n";
+    out << "      \"mode\": \"" << json_escape(report->environment.mode) << "\",\n";
+    out << "      \"evidence_quality\": \""
+        << json_escape(report->environment.evidence_quality) << "\",\n";
+    out << "      \"root_user\": "
+        << (report->environment.root_user ? "true" : "false") << ",\n";
+    out << "      \"msr_device_available\": "
+        << (report->environment.msr_device_available ? "true" : "false")
+        << ",\n";
+    out << "      \"rdtscp_supported\": "
+        << (report->environment.rdtscp_supported ? "true" : "false")
+        << ",\n";
+    out << "      \"hypervisor_detected\": "
+        << (report->environment.hypervisor_detected ? "true" : "false")
+        << ",\n";
+    out << "      \"container_detected\": "
+        << (report->environment.container_detected ? "true" : "false")
+        << ",\n";
+    out << "      \"limitations\": ";
+    write_json_string_array(out, report->environment.limitations);
+    out << ",\n";
+    out << "      \"reasons\": ";
+    write_json_string_array(out, report->environment.reasons);
+    out << "\n";
     out << "    },\n";
     if (report->scan_ran) {
         out << "    \"candidate_summary\": {\n";
@@ -787,6 +954,21 @@ std::string vis_doctor_to_markdown(const vis_doctor_report_t* report) {
     out << "- SMT active: " << (report->machine.smt_active ? "yes" : "no") << "\n";
     out << "- Isolated CPUs: " << (report->machine.isolated_cpus.empty() ? "none" : report->machine.isolated_cpus) << "\n";
     out << "- nohz_full CPUs: " << (report->machine.nohz_full_cpus.empty() ? "none" : report->machine.nohz_full_cpus) << "\n\n";
+    out << "## Environment Evidence\n";
+    out << "- Mode: " << report->environment.mode << "\n";
+    out << "- Hardware evidence: "
+        << report->environment.evidence_quality << "\n";
+    out << "- MSR device available: "
+        << (report->environment.msr_device_available ? "yes" : "no") << "\n";
+    out << "- RDTSCP supported: "
+        << (report->environment.rdtscp_supported ? "yes" : "no") << "\n";
+    out << "- Hypervisor detected: "
+        << (report->environment.hypervisor_detected ? "yes" : "no") << "\n";
+    out << "- Container detected: "
+        << (report->environment.container_detected ? "yes" : "no") << "\n";
+    out << "- Reasons: " << join_strings(report->environment.reasons) << "\n";
+    out << "- Limitations: "
+        << join_strings(report->environment.limitations) << "\n\n";
     if (report->scan_ran) {
         out << "## Candidate Summary\n";
         out << "- Sibling-aware primary CPUs: "

@@ -28,6 +28,9 @@ int main() {
     std::string json = vis_doctor_to_json(&report);
     if (!contains(json, "\"vis_doctor_report\"") ||
         !contains(json, "\"machine\"") ||
+        !contains(json, "\"environment\"") ||
+        !contains(json, "\"evidence_quality\"") ||
+        !contains(json, "\"limitations\"") ||
         !contains(json, "\"recommendations\"") ||
         !contains(json, "\"why_it_matters\"") ||
         !contains(json, "\"safe_suggestion\"") ||
@@ -40,6 +43,8 @@ int main() {
 
     std::string md = vis_doctor_to_markdown(&report);
     if (!contains(md, "# VIS Doctor AI Context") ||
+        !contains(md, "## Environment Evidence") ||
+        !contains(md, "Hardware evidence") ||
         !contains(md, "## Recommendations") ||
         !contains(md, "Safe suggestion") ||
         !contains(md, "Advanced suggestion") ||

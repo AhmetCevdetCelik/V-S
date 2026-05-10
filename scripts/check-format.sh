@@ -25,9 +25,9 @@ else
     else
         files=$(
             {
-            git diff --unified=0 --no-ext-diff --diff-filter=ACMR HEAD -- \
+            git diff --name-only --diff-filter=ACMR HEAD -- \
                 'vis-jitter/include/*.hpp' 'vis-jitter/src/*.cpp' 'vis-jitter/tests/*.cpp'
-            git diff --cached --unified=0 --no-ext-diff --diff-filter=ACMR -- \
+            git diff --cached --name-only --diff-filter=ACMR -- \
                 'vis-jitter/include/*.hpp' 'vis-jitter/src/*.cpp' 'vis-jitter/tests/*.cpp'
             } | sort -u
         )
