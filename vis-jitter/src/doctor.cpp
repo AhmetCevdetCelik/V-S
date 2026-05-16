@@ -256,6 +256,9 @@ static vis_doctor_sensor_t detect_tracefs_sensor() {
     bool readable = path_readable(source);
     if (!readable) {
         limitations.push_back(source + " is present but not readable by this process.");
+    } else {
+        limitations.push_back(
+            "tracefs is visible, but VIS Doctor does not enable or read tracing data yet.");
     }
 
     return make_sensor("tracefs",
@@ -270,6 +273,9 @@ static vis_doctor_sensor_t detect_tool_sensor(const std::string& name) {
     std::vector<std::string> limitations;
     if (!available) {
         limitations.push_back(name + " was not found in PATH.");
+    } else {
+        limitations.push_back(
+            name + " was found in PATH, but VIS Doctor does not execute or import it yet.");
     }
 
     return make_sensor(name,
@@ -1145,6 +1151,7 @@ std::string vis_doctor_to_markdown(const vis_doctor_report_t* report) {
     out << "- Limitations: "
         << join_strings(report->environment.limitations) << "\n\n";
     out << "## Sensor Evidence\n";
+    out << "These are passive availability signals; external tools are not executed or imported yet.\n";
     for (const auto& sensor : report->sensors) {
         out << "- " << sensor.name
             << ": available=" << (sensor.available ? "yes" : "no")

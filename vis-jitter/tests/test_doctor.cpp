@@ -57,6 +57,7 @@ int main() {
         !contains(md, "## Environment Evidence") ||
         !contains(md, "Hardware evidence") ||
         !contains(md, "## Sensor Evidence") ||
+        !contains(md, "passive availability signals") ||
         !contains(md, "tracefs") ||
         !contains(md, "rtla") ||
         !contains(md, "perf") ||
