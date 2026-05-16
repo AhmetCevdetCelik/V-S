@@ -132,8 +132,8 @@ paths, serial numbers, or other identifiers you do not want public.
 
 - **V1 — VIS Core / `vis-jitter`** ✅ Working proof — SMI-aware CPU jitter measurement and determinism reporting
 - **V1.2 — VIS Report** 🔜 Harden the JSON report schema, public API, and reproducible evidence format
-- **V1.3 — VIS Doctor** 🚧 Machine diagnosis and AI-readable recommendations: SMT, governor, IRQs, isolation, NUMA, HugePages, SMI access
-- **V1.5 — Sensor-Agnostic Doctor** 🚧 Detect MSR/sysfs/procfs/tracefs/RTLA/perf evidence sources and report limitations instead of duplicating mature Linux RT sensors
+- **V1.3 — VIS Doctor** ✅ Advisory diagnosis and AI-readable recommendations: SMT, governor, IRQs, isolation, NUMA, HugePages, SMI access
+- **V1.5 — Sensor-Agnostic Doctor** ✅ MVP complete — Detect MSR/sysfs/procfs/tracefs/RTLA/perf evidence sources and report limitations without duplicating mature Linux RT sensors
 - **V2 — VIS CPU** 🔜 Apply and verify low-risk CPU determinism profiles
 - **V2.5 — VIS-Mem** 🔜 Measure and tune memory locality, page faults, HugePages, bandwidth, and cache behavior
 - **V3 — VIS Lab** 🔜 Compare profiles, run before/after benchmarks, and recommend only measured improvements
@@ -209,16 +209,18 @@ make vis-doctor
 sudo ./vis-doctor --scan --duration 30 --threshold 100 --output doctor.json --llm doctor.md
 ```
 
-The Markdown output is designed to be pasted into an AI assistant. VIS Doctor
-V1.3 is advisory only: it explains, ranks, and recommends validation commands;
-it does not change CPU, IRQ, governor, isolation, or memory settings.
+The Markdown output is designed to be pasted into an AI assistant. VIS Doctor is
+advisory only: it explains, ranks, and recommends validation commands; it does
+not change CPU, IRQ, governor, isolation, or memory settings.
 It also reports whether the current environment looks like bare metal,
 virtualized, containerized, or unknown, and marks hardware evidence as strong,
 partial, limited, or unavailable.
 Doctor also records which evidence sensors are available today, including MSR,
-sysfs, procfs, tracefs, RTLA, and perf. VIS does not try to replace mature Linux
-RT/performance tools; the long-term direction is to align with them and consume
-their evidence where that is better than duplicating sensors.
+sysfs, procfs, tracefs, RTLA, and perf. In the V1.5 MVP, tracefs, RTLA, and perf
+are passive availability signals: VIS Doctor does not execute or import those
+tools yet. VIS does not try to replace mature Linux RT/performance tools; the
+long-term direction is to align with them and consume their evidence where that
+is better than duplicating sensors.
 
 ---
 
@@ -577,6 +579,9 @@ MIT — see [LICENSE](LICENSE)
 ## Status
 
 Early development. V1 (`vis-jitter`) is functional and tested on Linux x86-64.
+VIS Doctor now has a V1.5 sensor-agnostic MVP for environment and sensor
+availability reporting. RTLA/perf import, deeper capability discovery, cgroups
+containment, VIS-Mem, and VIS-Infer remain future work.
+
 See [VIS Core V1 Notes](V1_NOTES.md) for completed scope, known limits, and
-validation commands.
-Contributions welcome.
+validation commands. Contributions welcome.
