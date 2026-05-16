@@ -59,9 +59,34 @@ static bool path_exists(const std::string& path) {
     return stat(path.c_str(), &st) == 0;
 }
 
+static bool path_readable(const std::string& path) {
+    return access(path.c_str(), R_OK) == 0;
+}
+
 static bool text_contains(const std::string& text,
                           const std::string& needle) {
     return text.find(needle) != std::string::npos;
+}
+
+static bool executable_in_path(const char* name) {
+    if (name == nullptr || *name == '\0') return false;
+    const char* path_env = getenv("PATH");
+    if (path_env == nullptr) return false;
+
+    std::string paths(path_env);
+    size_t start = 0;
+    while (start <= paths.size()) {
+        size_t end = paths.find(':', start);
+        std::string dir = paths.substr(start, end == std::string::npos
+            ? std::string::npos
+            : end - start);
+        if (dir.empty()) dir = ".";
+        std::string candidate = dir + "/" + name;
+        if (access(candidate.c_str(), X_OK) == 0) return true;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return false;
 }
 
 static bool cpuid_rdtscp_supported() {
@@ -145,6 +170,126 @@ static vis_doctor_environment_t detect_environment() {
     env.reasons.push_back(std::string("rdtscp_supported=") +
                           (env.rdtscp_supported ? "yes" : "no"));
     return env;
+}
+
+static vis_doctor_sensor_t make_sensor(const std::string& name,
+                                       bool available,
+                                       const std::string& quality,
+                                       const std::string& source,
+                                       const std::vector<std::string>& limitations) {
+    vis_doctor_sensor_t sensor{};
+    sensor.name = name;
+    sensor.available = available;
+    sensor.quality = quality;
+    sensor.source = source;
+    sensor.limitations = limitations;
+    return sensor;
+}
+
+static vis_doctor_sensor_t detect_msr_sensor(const vis_doctor_environment_t& env) {
+    std::vector<std::string> limitations;
+    if (!env.msr_device_available) {
+        limitations.push_back("MSR device is not available at /dev/cpu/0/msr.");
+    }
+    if (!env.root_user) {
+        limitations.push_back(
+            "Current process is not root; MSR reads may require sudo or CAP_SYS_RAWIO.");
+    }
+    if (!env.rdtscp_supported) {
+        limitations.push_back(
+            "RDTSCP is unavailable, so VIS Core cannot use its preferred x86 timing path.");
+    }
+
+    std::string quality = "unavailable";
+    if (env.root_user && env.msr_device_available && env.rdtscp_supported) {
+        quality = "strong";
+    } else if (env.msr_device_available || env.rdtscp_supported) {
+        quality = "partial";
+    }
+
+    return make_sensor("msr",
+                       env.msr_device_available,
+                       quality,
+                       "IA32_SMI_COUNT via /dev/cpu/*/msr",
+                       limitations);
+}
+
+static vis_doctor_sensor_t detect_path_sensor(const std::string& name,
+                                              const std::string& path,
+                                              const std::string& source) {
+    std::vector<std::string> limitations;
+    bool exists = path_exists(path);
+    bool readable = path_readable(path);
+    if (!exists) {
+        limitations.push_back(path + " is not present.");
+    } else if (!readable) {
+        limitations.push_back(path + " is present but not readable.");
+    }
+
+    std::string quality = "unavailable";
+    if (exists && readable) {
+        quality = "strong";
+    } else if (exists) {
+        quality = "limited";
+    }
+
+    return make_sensor(name, exists && readable, quality, source, limitations);
+}
+
+static vis_doctor_sensor_t detect_tracefs_sensor() {
+    std::vector<std::string> limitations;
+    const std::string primary = "/sys/kernel/tracing";
+    const std::string fallback = "/sys/kernel/debug/tracing";
+    std::string source;
+
+    if (path_exists(primary)) {
+        source = primary;
+    } else if (path_exists(fallback)) {
+        source = fallback;
+    } else {
+        source = "tracefs";
+        limitations.push_back(
+            "tracefs is not mounted at /sys/kernel/tracing or /sys/kernel/debug/tracing.");
+        return make_sensor("tracefs", false, "unavailable", source, limitations);
+    }
+
+    bool readable = path_readable(source);
+    if (!readable) {
+        limitations.push_back(source + " is present but not readable by this process.");
+    }
+
+    return make_sensor("tracefs",
+                       readable,
+                       readable ? "partial" : "limited",
+                       source,
+                       limitations);
+}
+
+static vis_doctor_sensor_t detect_tool_sensor(const std::string& name) {
+    bool available = executable_in_path(name.c_str());
+    std::vector<std::string> limitations;
+    if (!available) {
+        limitations.push_back(name + " was not found in PATH.");
+    }
+
+    return make_sensor(name,
+                       available,
+                       available ? "partial" : "unavailable",
+                       name,
+                       limitations);
+}
+
+static std::vector<vis_doctor_sensor_t> detect_sensors(const vis_doctor_environment_t& env) {
+    std::vector<vis_doctor_sensor_t> sensors;
+    sensors.push_back(detect_msr_sensor(env));
+    sensors.push_back(detect_path_sensor("sysfs",
+        "/sys/devices/system/cpu",
+        "/sys/devices/system/cpu"));
+    sensors.push_back(detect_path_sensor("procfs", "/proc", "/proc"));
+    sensors.push_back(detect_tracefs_sensor());
+    sensors.push_back(detect_tool_sensor("rtla"));
+    sensors.push_back(detect_tool_sensor("perf"));
+    return sensors;
 }
 
 static bool cpu_dir_id(const std::string& name, uint32_t* out) {
@@ -262,6 +407,17 @@ static std::string join_strings(const std::vector<std::string>& values) {
     for (size_t i = 0; i < values.size(); i++) {
         if (i != 0) out += ", ";
         out += values[i];
+    }
+    return out.empty() ? "none" : out;
+}
+
+static std::string join_sensor_status(const std::vector<vis_doctor_sensor_t>& sensors) {
+    std::string out;
+    for (size_t i = 0; i < sensors.size(); i++) {
+        if (i != 0) out += " ";
+        out += sensors[i].name;
+        out += "=";
+        out += sensors[i].available ? "yes" : "no";
     }
     return out.empty() ? "none" : out;
 }
@@ -482,6 +638,7 @@ int vis_doctor_inspect(vis_doctor_report_t* report) {
 
     report->machine.generated_at = now_iso8601();
     report->environment = detect_environment();
+    report->sensors = detect_sensors(report->environment);
     report->machine.smt_active =
         read_text("/sys/devices/system/cpu/smt/active") == "1";
     report->machine.isolated_cpus = read_text("/sys/devices/system/cpu/isolated");
@@ -782,6 +939,7 @@ void vis_doctor_print_summary(const vis_doctor_report_t* report) {
            report->environment.evidence_quality.c_str(),
            report->environment.msr_device_available ? "yes" : "no",
            report->environment.rdtscp_supported ? "yes" : "no");
+    printf("Sensors: %s\n", join_sensor_status(report->sensors).c_str());
 
     if (report->scan_ran) {
         printf("Primary candidate CPUs: %s\n", join_cpus(primary).c_str());
@@ -844,6 +1002,23 @@ std::string vis_doctor_to_json(const vis_doctor_report_t* report) {
     out << "      \"reasons\": ";
     write_json_string_array(out, report->environment.reasons);
     out << "\n";
+    out << "    },\n";
+    out << "    \"sensors\": {\n";
+    for (size_t i = 0; i < report->sensors.size(); i++) {
+        const auto& sensor = report->sensors[i];
+        out << "      \"" << json_escape(sensor.name) << "\": {\n";
+        out << "        \"available\": "
+            << (sensor.available ? "true" : "false") << ",\n";
+        out << "        \"quality\": \""
+            << json_escape(sensor.quality) << "\",\n";
+        out << "        \"source\": \""
+            << json_escape(sensor.source) << "\",\n";
+        out << "        \"limitations\": ";
+        write_json_string_array(out, sensor.limitations);
+        out << "\n";
+        out << "      }";
+        out << (i + 1 == report->sensors.size() ? "\n" : ",\n");
+    }
     out << "    },\n";
     if (report->scan_ran) {
         out << "    \"candidate_summary\": {\n";
@@ -939,7 +1114,7 @@ std::string vis_doctor_to_json(const vis_doctor_report_t* report) {
         out << (i + 1 == report->recommendations.size() ? "\n" : ",\n");
     }
     out << "    ],\n";
-    out << "    \"ai_context\": \"VIS Doctor reports machine facts, optional SMI-aware jitter scans, findings, and advisory recommendations. It does not mutate system settings in V1.3. Treat safe suggestions as low-risk validation steps; advanced suggestions require human review because they may affect power, thermals, boot behavior, scheduler behavior, or workload throughput.\"\n";
+    out << "    \"ai_context\": \"VIS Doctor reports machine facts, evidence sensors, optional SMI-aware jitter scans, findings, and advisory recommendations. It does not mutate system settings. VIS should align with mature Linux RT/performance tools instead of blindly duplicating their sensors. Treat safe suggestions as low-risk validation steps; advanced suggestions require human review because they may affect power, thermals, boot behavior, scheduler behavior, or workload throughput.\"\n";
     out << "  }\n}\n";
     return out.str();
 }
@@ -969,6 +1144,15 @@ std::string vis_doctor_to_markdown(const vis_doctor_report_t* report) {
     out << "- Reasons: " << join_strings(report->environment.reasons) << "\n";
     out << "- Limitations: "
         << join_strings(report->environment.limitations) << "\n\n";
+    out << "## Sensor Evidence\n";
+    for (const auto& sensor : report->sensors) {
+        out << "- " << sensor.name
+            << ": available=" << (sensor.available ? "yes" : "no")
+            << ", quality=" << sensor.quality
+            << ", source=" << sensor.source
+            << ", limitations=" << join_strings(sensor.limitations) << "\n";
+    }
+    out << "\n";
     if (report->scan_ran) {
         out << "## Candidate Summary\n";
         out << "- Sibling-aware primary CPUs: "
@@ -1025,7 +1209,7 @@ std::string vis_doctor_to_markdown(const vis_doctor_report_t* report) {
                 << " class=" << s.throughput_class << "\n";
         }
     }
-    out << "\nInterpret this as advisory evidence. VIS Doctor V1.3 does not apply system changes. Advanced suggestions require human review before use.\n";
+    out << "\nInterpret this as advisory evidence. VIS Doctor does not apply system changes. Advanced suggestions require human review before use.\n";
     return out.str();
 }
 

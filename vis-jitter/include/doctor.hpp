@@ -53,6 +53,14 @@ struct vis_doctor_environment_t {
     std::vector<std::string> reasons;
 };
 
+struct vis_doctor_sensor_t {
+    std::string name;
+    bool available;
+    std::string quality;
+    std::string source;
+    std::vector<std::string> limitations;
+};
+
 struct vis_doctor_scan_t {
     uint32_t cpu_id;
     bool scanned;
@@ -110,6 +118,7 @@ struct vis_doctor_runtime_policy_t {
 struct vis_doctor_report_t {
     vis_doctor_machine_t machine;
     vis_doctor_environment_t environment;
+    std::vector<vis_doctor_sensor_t> sensors;
     std::vector<vis_doctor_scan_t> scans;
     std::vector<vis_doctor_finding_t> findings;
     std::vector<vis_doctor_recommendation_t> recommendations;

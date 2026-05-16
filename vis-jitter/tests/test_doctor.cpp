@@ -24,6 +24,10 @@ int main() {
         std::printf("[test] FAILED: expected at least one online CPU.\n");
         return 1;
     }
+    if (report.sensors.size() < 6) {
+        std::printf("[test] FAILED: expected baseline evidence sensors.\n");
+        return 1;
+    }
 
     std::string json = vis_doctor_to_json(&report);
     if (!contains(json, "\"vis_doctor_report\"") ||
@@ -31,6 +35,13 @@ int main() {
         !contains(json, "\"environment\"") ||
         !contains(json, "\"evidence_quality\"") ||
         !contains(json, "\"limitations\"") ||
+        !contains(json, "\"sensors\"") ||
+        !contains(json, "\"msr\"") ||
+        !contains(json, "\"sysfs\"") ||
+        !contains(json, "\"procfs\"") ||
+        !contains(json, "\"tracefs\"") ||
+        !contains(json, "\"rtla\"") ||
+        !contains(json, "\"perf\"") ||
         !contains(json, "\"recommendations\"") ||
         !contains(json, "\"why_it_matters\"") ||
         !contains(json, "\"safe_suggestion\"") ||
@@ -45,6 +56,10 @@ int main() {
     if (!contains(md, "# VIS Doctor AI Context") ||
         !contains(md, "## Environment Evidence") ||
         !contains(md, "Hardware evidence") ||
+        !contains(md, "## Sensor Evidence") ||
+        !contains(md, "tracefs") ||
+        !contains(md, "rtla") ||
+        !contains(md, "perf") ||
         !contains(md, "## Recommendations") ||
         !contains(md, "Safe suggestion") ||
         !contains(md, "Advanced suggestion") ||

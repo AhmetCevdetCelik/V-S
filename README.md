@@ -72,7 +72,8 @@ VIS currently ships as a Linux/x86_64 prototype under `vis-jitter/`.
   windows using `IA32_SMI_COUNT`, and emits terminal/JSON evidence.
 - `vis-doctor` scans the machine, ranks CPU candidates, detects SMT, CPU
   governor, isolation, HugePages, environment mode, and hardware evidence
-  quality, then writes an AI-readable diagnosis.
+  quality, records available evidence sensors, then writes an AI-readable
+  diagnosis.
 - `vis-run` reads Doctor policy, applies temporary workload CPU affinity, and
   emits a runtime attestation.
 - `vis-compare` runs the same workload through VIS runtime profiles and can
@@ -132,6 +133,7 @@ paths, serial numbers, or other identifiers you do not want public.
 - **V1 — VIS Core / `vis-jitter`** ✅ Working proof — SMI-aware CPU jitter measurement and determinism reporting
 - **V1.2 — VIS Report** 🔜 Harden the JSON report schema, public API, and reproducible evidence format
 - **V1.3 — VIS Doctor** 🚧 Machine diagnosis and AI-readable recommendations: SMT, governor, IRQs, isolation, NUMA, HugePages, SMI access
+- **V1.5 — Sensor-Agnostic Doctor** 🚧 Detect MSR/sysfs/procfs/tracefs/RTLA/perf evidence sources and report limitations instead of duplicating mature Linux RT sensors
 - **V2 — VIS CPU** 🔜 Apply and verify low-risk CPU determinism profiles
 - **V2.5 — VIS-Mem** 🔜 Measure and tune memory locality, page faults, HugePages, bandwidth, and cache behavior
 - **V3 — VIS Lab** 🔜 Compare profiles, run before/after benchmarks, and recommend only measured improvements
@@ -213,6 +215,10 @@ it does not change CPU, IRQ, governor, isolation, or memory settings.
 It also reports whether the current environment looks like bare metal,
 virtualized, containerized, or unknown, and marks hardware evidence as strong,
 partial, limited, or unavailable.
+Doctor also records which evidence sensors are available today, including MSR,
+sysfs, procfs, tracefs, RTLA, and perf. VIS does not try to replace mature Linux
+RT/performance tools; the long-term direction is to align with them and consume
+their evidence where that is better than duplicating sensors.
 
 ---
 
