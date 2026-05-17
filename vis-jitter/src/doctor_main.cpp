@@ -22,6 +22,7 @@ static void print_usage(const char* argv0) {
         "Options:\n"
         "  --inspect              Inspect machine only (default, rootless)\n"
         "  --scan                 Run all-core SMI-aware jitter scan (requires root/MSR)\n"
+        "  --baseline <file.json> Compare scan accepted/s against a saved Doctor baseline\n"
         "  --duration <seconds>   Scan duration per CPU (default: 30)\n"
         "  --threshold <ns>       P99 threshold in ns (default: 100.0)\n"
         "  --output <file.json>   Write AI/tool-readable JSON report\n"
@@ -64,6 +65,7 @@ int main(int argc, char* argv[]) {
     double threshold_ns = VIS_DEFAULT_THRESHOLD_NS;
     const char* output_path = nullptr;
     const char* llm_path = nullptr;
+    const char* baseline_path = nullptr;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -73,6 +75,8 @@ int main(int argc, char* argv[]) {
             scan = false;
         } else if (strcmp(argv[i], "--scan") == 0) {
             scan = true;
+        } else if (strcmp(argv[i], "--baseline") == 0 && i + 1 < argc) {
+            baseline_path = argv[++i];
         } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
             if (!parse_u32(argv[++i], &duration_sec) || duration_sec == 0) {
                 fprintf(stderr, "[vis-doctor] Invalid --duration value.\n");
@@ -94,6 +98,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (baseline_path != nullptr && !scan) {
+        fprintf(stderr, "[vis-doctor] --baseline requires --scan.\n");
+        return 1;
+    }
+
     vis_doctor_report_t report;
     int ret = scan
         ? vis_doctor_scan_all(duration_sec, threshold_ns, &report)
@@ -101,6 +110,15 @@ int main(int argc, char* argv[]) {
     if (ret < 0) {
         fprintf(stderr, "[vis-doctor] ERROR: diagnosis failed.\n");
         return 1;
+    }
+    if (baseline_path != nullptr) {
+        if (vis_doctor_load_baseline(baseline_path, &report) < 0) {
+            fprintf(stderr,
+                    "[vis-doctor] ERROR: cannot read/parse baseline: %s\n",
+                    baseline_path);
+            return 1;
+        }
+        vis_doctor_analyze(&report);
     }
 
     vis_doctor_print_summary(&report);
@@ -125,4 +143,3 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
-

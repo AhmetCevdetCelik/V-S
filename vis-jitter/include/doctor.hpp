@@ -81,6 +81,23 @@ struct vis_doctor_scan_t {
     std::string throughput_class;
 };
 
+struct vis_doctor_baseline_cpu_t {
+    uint32_t cpu_id;
+    double baseline_accepted_per_sec;
+    double current_accepted_per_sec;
+    double drop_ratio;
+};
+
+struct vis_doctor_baseline_t {
+    std::string path;
+    bool available;
+    uint32_t compared_cpus;
+    double global_accepted_per_sec_drop_ratio;
+    bool pressure_detected;
+    std::vector<uint32_t> affected_cpus;
+    std::vector<vis_doctor_baseline_cpu_t> cpus;
+};
+
 struct vis_doctor_finding_t {
     std::string severity;
     std::string category;
@@ -119,6 +136,7 @@ struct vis_doctor_report_t {
     vis_doctor_machine_t machine;
     vis_doctor_environment_t environment;
     std::vector<vis_doctor_sensor_t> sensors;
+    vis_doctor_baseline_t baseline;
     std::vector<vis_doctor_scan_t> scans;
     std::vector<vis_doctor_finding_t> findings;
     std::vector<vis_doctor_recommendation_t> recommendations;
@@ -131,6 +149,7 @@ struct vis_doctor_report_t {
 int vis_doctor_inspect(vis_doctor_report_t* report);
 int vis_doctor_scan_all(uint32_t duration_sec, double threshold_ns,
                         vis_doctor_report_t* report);
+int vis_doctor_load_baseline(const char* path, vis_doctor_report_t* report);
 void vis_doctor_analyze(vis_doctor_report_t* report);
 void vis_doctor_print_summary(const vis_doctor_report_t* report);
 std::string vis_doctor_to_json(const vis_doctor_report_t* report);
