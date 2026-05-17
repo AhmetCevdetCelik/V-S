@@ -17,6 +17,7 @@
 #include <ctime>
 #include <cpuid.h>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <sys/stat.h>
@@ -66,6 +67,37 @@ static bool path_readable(const std::string& path) {
 static bool text_contains(const std::string& text,
                           const std::string& needle) {
     return text.find(needle) != std::string::npos;
+}
+
+static bool parse_number_after_key(const std::string& text,
+                                   size_t start,
+                                   const std::string& key,
+                                   double* out) {
+    if (out == nullptr) return false;
+    size_t key_pos = text.find(key, start);
+    if (key_pos == std::string::npos) return false;
+    size_t colon = text.find(':', key_pos + key.size());
+    if (colon == std::string::npos) return false;
+    const char* begin = text.c_str() + colon + 1;
+    char* end = nullptr;
+    errno = 0;
+    double value = strtod(begin, &end);
+    if (errno != 0 || end == begin) return false;
+    *out = value;
+    return true;
+}
+
+static bool parse_u32_after_key(const std::string& text,
+                                size_t start,
+                                const std::string& key,
+                                uint32_t* out) {
+    double value = 0.0;
+    if (out == nullptr || !parse_number_after_key(text, start, key, &value)) {
+        return false;
+    }
+    if (value < 0.0 || value > UINT32_MAX) return false;
+    *out = static_cast<uint32_t>(value);
+    return true;
 }
 
 static bool executable_in_path(const char* name) {
@@ -408,6 +440,12 @@ static std::string join_cpus(const std::vector<uint32_t>& cpus) {
     return out.empty() ? "none" : out;
 }
 
+static std::vector<uint32_t> sorted_unique(std::vector<uint32_t> cpus) {
+    std::sort(cpus.begin(), cpus.end());
+    cpus.erase(std::unique(cpus.begin(), cpus.end()), cpus.end());
+    return cpus;
+}
+
 static std::string join_strings(const std::vector<std::string>& values) {
     std::string out;
     for (size_t i = 0; i < values.size(); i++) {
@@ -728,6 +766,77 @@ int vis_doctor_scan_all(uint32_t duration_sec, double threshold_ns,
     return 0;
 }
 
+int vis_doctor_load_baseline(const char* path, vis_doctor_report_t* report) {
+    if (path == nullptr || path[0] == '\0' || report == nullptr) return -1;
+
+    std::string text = read_text(path);
+    if (text.empty()) return -1;
+
+    std::map<uint32_t, double> current_rates;
+    for (const auto& scan : report->scans) {
+        current_rates[scan.cpu_id] = scan.accepted_per_sec;
+    }
+
+    vis_doctor_baseline_t baseline{};
+    baseline.path = path;
+
+    size_t pos = 0;
+    while (true) {
+        size_t cpu_pos = text.find("\"cpu\"", pos);
+        if (cpu_pos == std::string::npos) break;
+
+        size_t object_end = text.find('}', cpu_pos);
+        if (object_end == std::string::npos) break;
+
+        uint32_t cpu_id = 0;
+        double baseline_rate = 0.0;
+        if (parse_u32_after_key(text, cpu_pos, "\"cpu\"", &cpu_id) &&
+            parse_number_after_key(text, cpu_pos,
+                                   "\"accepted_per_sec\"",
+                                   &baseline_rate) &&
+            baseline_rate > 0.0) {
+            auto current = current_rates.find(cpu_id);
+            if (current != current_rates.end()) {
+                vis_doctor_baseline_cpu_t item{};
+                item.cpu_id = cpu_id;
+                item.baseline_accepted_per_sec = baseline_rate;
+                item.current_accepted_per_sec = current->second;
+                item.drop_ratio = current->second >= baseline_rate
+                    ? 0.0
+                    : 1.0 - (current->second / baseline_rate);
+                baseline.cpus.push_back(item);
+            }
+        }
+        pos = object_end + 1;
+    }
+
+    if (baseline.cpus.empty()) return -1;
+
+    double baseline_sum = 0.0;
+    double current_sum = 0.0;
+    for (const auto& item : baseline.cpus) {
+        baseline_sum += item.baseline_accepted_per_sec;
+        current_sum += item.current_accepted_per_sec;
+        if (item.drop_ratio >= 0.40) {
+            baseline.affected_cpus.push_back(item.cpu_id);
+        }
+    }
+
+    baseline.available = true;
+    baseline.compared_cpus = static_cast<uint32_t>(baseline.cpus.size());
+    baseline.global_accepted_per_sec_drop_ratio =
+        (baseline_sum > 0.0 && current_sum < baseline_sum)
+            ? 1.0 - (current_sum / baseline_sum)
+            : 0.0;
+    baseline.pressure_detected =
+        baseline.global_accepted_per_sec_drop_ratio >= 0.40 ||
+        !baseline.affected_cpus.empty();
+    baseline.affected_cpus = sorted_unique(baseline.affected_cpus);
+
+    report->baseline = baseline;
+    return 0;
+}
+
 void vis_doctor_analyze(vis_doctor_report_t* report) {
     if (report == nullptr) return;
     report->findings.clear();
@@ -832,17 +941,37 @@ void vis_doctor_analyze(vis_doctor_report_t* report) {
             lower});
     }
 
+    if (report->baseline.available && report->baseline.pressure_detected) {
+        std::ostringstream evidence;
+        evidence << "Baseline " << report->baseline.path
+                 << ", compared_cpus=" << report->baseline.compared_cpus
+                 << ", global_drop="
+                 << static_cast<int>(report->baseline.global_accepted_per_sec_drop_ratio * 100.0)
+                 << "%";
+        if (!report->baseline.affected_cpus.empty()) {
+            evidence << ", affected CPUs: "
+                     << join_cpus(report->baseline.affected_cpus);
+        }
+        report->findings.push_back({"warning", "cpu_pressure",
+            "Accepted sample throughput dropped compared to baseline.",
+            evidence.str(),
+            report->baseline.affected_cpus});
+    }
+
     std::vector<uint32_t> primary =
         sibling_aware_primary_candidates(report, 8);
     std::vector<uint32_t> all_clean =
         first_cpu_ids(clean_higher_throughput_scans(report), 12);
+    std::vector<uint32_t> avoid = lower;
+    avoid.insert(avoid.end(), contaminated.begin(), contaminated.end());
+    avoid = sorted_unique(avoid);
 
     report->runtime_policy.available = !primary.empty();
     report->runtime_policy.profile = "strict";
     report->runtime_policy.cpu_policy = "sibling_aware_primary";
     report->runtime_policy.primary_cpus = primary;
     report->runtime_policy.secondary_cpus = all_clean;
-    report->runtime_policy.avoid_cpus = lower;
+    report->runtime_policy.avoid_cpus = avoid;
     report->runtime_policy.contaminated_cpus = contaminated;
     report->runtime_policy.smt_policy = report->machine.smt_active
         ? "avoid_sibling_sharing_for_first_profile"
@@ -863,6 +992,10 @@ void vis_doctor_analyze(vis_doctor_report_t* report) {
     if (report->runtime_policy.requires_longer_validation) {
         add_warning_once(&report->runtime_policy.warnings,
                          "short_scan_requires_longer_validation");
+    }
+    if (report->baseline.available && report->baseline.pressure_detected) {
+        add_warning_once(&report->runtime_policy.warnings,
+                         "baseline_cpu_pressure_detected");
     }
 
     add_recommendation(report, "safe",
@@ -909,6 +1042,19 @@ void vis_doctor_analyze(vis_doctor_report_t* report) {
             "Reduces risk of choosing a noisy critical CPU.",
             "sudo ./vis-jitter --cpu " + std::to_string(contaminated.front()) +
                 " --duration 60 --threshold 100");
+    }
+
+    if (report->baseline.available && report->baseline.pressure_detected) {
+        add_recommendation(report, "safe",
+            "Investigate CPU pressure against the saved baseline.",
+            "The current scan accepted fewer samples per second than the baseline.",
+            "A global or per-CPU throughput drop can mean background load, thermal throttling, governor drift, or sibling contention.",
+            "Stop intentional stress loads, keep power mode consistent, and rerun with the same duration before changing settings.",
+            "Compare governor, thermals, and workload placement after collecting repeated baseline/current pairs.",
+            "Changing CPU policy based on a single loaded scan can hide the actual workload or thermal cause.",
+            "Separates real hardware class differences from temporary runtime pressure.",
+            "sudo ./vis-doctor --scan --duration 60 --threshold 100 --baseline " +
+                report->baseline.path + " --output doctor-pressure.json --llm doctor-pressure.md");
     }
 
     if (!lower.empty()) {
@@ -1026,6 +1172,32 @@ std::string vis_doctor_to_json(const vis_doctor_report_t* report) {
         out << (i + 1 == report->sensors.size() ? "\n" : ",\n");
     }
     out << "    },\n";
+    if (report->baseline.available) {
+        out << "    \"baseline_comparison\": {\n";
+        out << "      \"path\": \"" << json_escape(report->baseline.path) << "\",\n";
+        out << "      \"available\": true,\n";
+        out << "      \"compared_cpus\": " << report->baseline.compared_cpus << ",\n";
+        out << "      \"global_drop_ratio\": "
+            << report->baseline.global_accepted_per_sec_drop_ratio << ",\n";
+        out << "      \"pressure_detected\": "
+            << (report->baseline.pressure_detected ? "true" : "false") << ",\n";
+        out << "      \"affected_cpus\": ";
+        write_json_u32_array(out, report->baseline.affected_cpus);
+        out << ",\n";
+        out << "      \"cpus\": [\n";
+        for (size_t i = 0; i < report->baseline.cpus.size(); i++) {
+            const auto& c = report->baseline.cpus[i];
+            out << "        {\"cpu\": " << c.cpu_id
+                << ", \"baseline_accepted_per_sec\": "
+                << c.baseline_accepted_per_sec
+                << ", \"current_accepted_per_sec\": "
+                << c.current_accepted_per_sec
+                << ", \"drop_ratio\": " << c.drop_ratio << "}";
+            out << (i + 1 == report->baseline.cpus.size() ? "\n" : ",\n");
+        }
+        out << "      ]\n";
+        out << "    },\n";
+    }
     if (report->scan_ran) {
         out << "    \"candidate_summary\": {\n";
         out << "      \"sibling_aware_primary\": \""
@@ -1160,6 +1332,18 @@ std::string vis_doctor_to_markdown(const vis_doctor_report_t* report) {
             << ", limitations=" << join_strings(sensor.limitations) << "\n";
     }
     out << "\n";
+    if (report->baseline.available) {
+        out << "## Baseline Comparison\n";
+        out << "- Baseline path: " << report->baseline.path << "\n";
+        out << "- Compared CPUs: " << report->baseline.compared_cpus << "\n";
+        out << "- Global accepted/s drop: "
+            << static_cast<int>(report->baseline.global_accepted_per_sec_drop_ratio * 100.0)
+            << "%\n";
+        out << "- Pressure detected: "
+            << (report->baseline.pressure_detected ? "yes" : "no") << "\n";
+        out << "- Affected CPUs: "
+            << join_cpus(report->baseline.affected_cpus) << "\n\n";
+    }
     if (report->scan_ran) {
         out << "## Candidate Summary\n";
         out << "- Sibling-aware primary CPUs: "
