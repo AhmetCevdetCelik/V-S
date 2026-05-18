@@ -208,14 +208,22 @@ static vis_doctor_sensor_t make_sensor(const std::string& name,
                                        bool available,
                                        const std::string& quality,
                                        const std::string& source,
+                                       const std::vector<std::string>& capabilities,
                                        const std::vector<std::string>& limitations) {
     vis_doctor_sensor_t sensor{};
     sensor.name = name;
     sensor.available = available;
     sensor.quality = quality;
     sensor.source = source;
+    sensor.capabilities = capabilities;
     sensor.limitations = limitations;
     return sensor;
+}
+
+static bool command_exits_ok(const std::string& command) {
+    std::string quiet_command = command + " >/dev/null 2>&1";
+    int status = system(quiet_command.c_str());
+    return status == 0;
 }
 
 static vis_doctor_sensor_t detect_msr_sensor(const vis_doctor_environment_t& env) {
@@ -243,6 +251,9 @@ static vis_doctor_sensor_t detect_msr_sensor(const vis_doctor_environment_t& env
                        env.msr_device_available,
                        quality,
                        "IA32_SMI_COUNT via /dev/cpu/*/msr",
+                       env.msr_device_available
+                            ? std::vector<std::string>{"ia32_smi_count"}
+                            : std::vector<std::string>{},
                        limitations);
 }
 
@@ -265,7 +276,14 @@ static vis_doctor_sensor_t detect_path_sensor(const std::string& name,
         quality = "limited";
     }
 
-    return make_sensor(name, exists && readable, quality, source, limitations);
+    return make_sensor(name,
+                       exists && readable,
+                       quality,
+                       source,
+                       exists && readable
+                            ? std::vector<std::string>{source}
+                            : std::vector<std::string>{},
+                       limitations);
 }
 
 static vis_doctor_sensor_t detect_tracefs_sensor() {
@@ -282,13 +300,24 @@ static vis_doctor_sensor_t detect_tracefs_sensor() {
         source = "tracefs";
         limitations.push_back(
             "tracefs is not mounted at /sys/kernel/tracing or /sys/kernel/debug/tracing.");
-        return make_sensor("tracefs", false, "unavailable", source, limitations);
+        return make_sensor("tracefs", false, "unavailable", source, {}, limitations);
     }
 
     bool readable = path_readable(source);
+    std::vector<std::string> capabilities;
     if (!readable) {
         limitations.push_back(source + " is present but not readable by this process.");
     } else {
+        if (path_readable(source + "/available_tracers")) {
+            capabilities.push_back("available_tracers");
+        } else {
+            limitations.push_back(source + "/available_tracers is not readable.");
+        }
+        if (path_readable(source + "/available_events")) {
+            capabilities.push_back("available_events");
+        } else {
+            limitations.push_back(source + "/available_events is not readable.");
+        }
         limitations.push_back(
             "tracefs is visible, but VIS Doctor does not enable or read tracing data yet.");
     }
@@ -297,15 +326,38 @@ static vis_doctor_sensor_t detect_tracefs_sensor() {
                        readable,
                        readable ? "partial" : "limited",
                        source,
+                       capabilities,
                        limitations);
 }
 
-static vis_doctor_sensor_t detect_tool_sensor(const std::string& name) {
+static vis_doctor_sensor_t detect_rtla_sensor() {
+    const std::string name = "rtla";
     bool available = executable_in_path(name.c_str());
+    std::vector<std::string> capabilities;
     std::vector<std::string> limitations;
     if (!available) {
         limitations.push_back(name + " was not found in PATH.");
     } else {
+        if (command_exits_ok("rtla --help")) {
+            capabilities.push_back("help");
+        } else {
+            limitations.push_back("rtla --help is not accessible.");
+        }
+        if (command_exits_ok("rtla osnoise --help")) {
+            capabilities.push_back("osnoise");
+        } else {
+            limitations.push_back("rtla osnoise --help is not accessible.");
+        }
+        if (command_exits_ok("rtla timerlat --help")) {
+            capabilities.push_back("timerlat");
+        } else {
+            limitations.push_back("rtla timerlat --help is not accessible.");
+        }
+        if (command_exits_ok("rtla hwnoise --help")) {
+            capabilities.push_back("hwnoise");
+        } else {
+            limitations.push_back("rtla hwnoise --help is not accessible.");
+        }
         limitations.push_back(
             name + " was found in PATH, but VIS Doctor does not execute or import it yet.");
     }
@@ -314,6 +366,32 @@ static vis_doctor_sensor_t detect_tool_sensor(const std::string& name) {
                        available,
                        available ? "partial" : "unavailable",
                        name,
+                       capabilities,
+                       limitations);
+}
+
+static vis_doctor_sensor_t detect_perf_sensor() {
+    const std::string name = "perf";
+    bool available = executable_in_path(name.c_str());
+    std::vector<std::string> capabilities;
+    std::vector<std::string> limitations;
+    if (!available) {
+        limitations.push_back(name + " was not found in PATH.");
+    } else {
+        if (command_exits_ok("perf --help")) {
+            capabilities.push_back("help");
+        } else {
+            limitations.push_back("perf --help is not accessible.");
+        }
+        limitations.push_back(
+            name + " was found in PATH, but VIS Doctor does not execute or import it yet.");
+    }
+
+    return make_sensor(name,
+                       available,
+                       available ? "partial" : "unavailable",
+                       name,
+                       capabilities,
                        limitations);
 }
 
@@ -325,8 +403,8 @@ static std::vector<vis_doctor_sensor_t> detect_sensors(const vis_doctor_environm
         "/sys/devices/system/cpu"));
     sensors.push_back(detect_path_sensor("procfs", "/proc", "/proc"));
     sensors.push_back(detect_tracefs_sensor());
-    sensors.push_back(detect_tool_sensor("rtla"));
-    sensors.push_back(detect_tool_sensor("perf"));
+    sensors.push_back(detect_rtla_sensor());
+    sensors.push_back(detect_perf_sensor());
     return sensors;
 }
 
@@ -1165,6 +1243,9 @@ std::string vis_doctor_to_json(const vis_doctor_report_t* report) {
             << json_escape(sensor.quality) << "\",\n";
         out << "        \"source\": \""
             << json_escape(sensor.source) << "\",\n";
+        out << "        \"capabilities\": ";
+        write_json_string_array(out, sensor.capabilities);
+        out << ",\n";
         out << "        \"limitations\": ";
         write_json_string_array(out, sensor.limitations);
         out << "\n";
@@ -1329,6 +1410,7 @@ std::string vis_doctor_to_markdown(const vis_doctor_report_t* report) {
             << ": available=" << (sensor.available ? "yes" : "no")
             << ", quality=" << sensor.quality
             << ", source=" << sensor.source
+            << ", capabilities=" << join_strings(sensor.capabilities)
             << ", limitations=" << join_strings(sensor.limitations) << "\n";
     }
     out << "\n";
