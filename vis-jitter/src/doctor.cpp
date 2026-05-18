@@ -668,6 +668,16 @@ static bool has_governor(const vis_doctor_report_t* report,
     return false;
 }
 
+static std::string active_bracket_value(const std::string& text) {
+    size_t open = text.find('[');
+    size_t close = text.find(']', open == std::string::npos ? 0 : open + 1);
+    if (open == std::string::npos || close == std::string::npos ||
+        close <= open + 1) {
+        return trim(text);
+    }
+    return text.substr(open + 1, close - open - 1);
+}
+
 static void add_warning_once(std::vector<std::string>* warnings,
                              const std::string& warning) {
     if (warnings == nullptr) return;
@@ -729,6 +739,30 @@ static void add_environment_recommendations(vis_doctor_report_t* report) {
             "grep -E 'HugePages_Total|HugePages_Free|Hugepagesize' /proc/meminfo");
     }
 
+    if (report->machine.thp_enabled == "always") {
+        add_recommendation(report, "advanced",
+            "Review Transparent HugePages before latency-sensitive memory tests.",
+            "THP is configured as always, which can introduce background memory-management latency.",
+            "THP can help throughput workloads, but latency-sensitive systems should measure before trusting it.",
+            "Keep THP unchanged for baseline collection, then compare madvise/never profiles separately.",
+            "For inference or database workloads, run a controlled before/after test with THP policy held constant.",
+            "Changing THP globally can affect unrelated workloads and may reduce throughput or increase memory pressure.",
+            "Separates CPU jitter evidence from memory-management latency effects.",
+            "cat /sys/kernel/mm/transparent_hugepage/enabled");
+    }
+
+    if (report->machine.swap_total_kb > 0) {
+        add_recommendation(report, "safe",
+            "Track swap availability before VIS-Mem experiments.",
+            "Swap is configured on this system.",
+            "Major page faults or swapping can create millisecond-scale stalls for inference, robotics, and realtime loops.",
+            "Do not disable swap blindly; first record baseline MemAvailable, SwapFree, and page-fault behavior.",
+            "For critical workloads, test mlock/pre-touch policies only after checking memory headroom.",
+            "Disabling swap or locking too much memory can trigger OOM behavior or hurt desktop responsiveness.",
+            "Makes future page-fault and mlock evidence easier to interpret.",
+            "grep -E 'MemAvailable|SwapTotal|SwapFree' /proc/meminfo");
+    }
+
     if (!report->machine.isolated_cpus.empty()) {
         add_recommendation(report, "advanced",
             "Validate the existing isolated CPU profile with workload-specific scans.",
@@ -765,6 +799,12 @@ int vis_doctor_inspect(vis_doctor_report_t* report) {
         read_text("/sys/devices/system/cpu/smt/active") == "1";
     report->machine.isolated_cpus = read_text("/sys/devices/system/cpu/isolated");
     report->machine.nohz_full_cpus = read_text("/sys/devices/system/cpu/nohz_full");
+    report->machine.thp_enabled = active_bracket_value(
+        read_text("/sys/kernel/mm/transparent_hugepage/enabled"));
+    report->machine.thp_defrag = active_bracket_value(
+        read_text("/sys/kernel/mm/transparent_hugepage/defrag"));
+    report->machine.khugepaged_defrag =
+        read_text("/sys/kernel/mm/transparent_hugepage/khugepaged/defrag");
     report->machine.hugepages_total = read_u64("/proc/sys/vm/nr_hugepages");
 
     std::ifstream meminfo("/proc/meminfo");
@@ -772,6 +812,10 @@ int vis_doctor_inspect(vis_doctor_report_t* report) {
     uint64_t value = 0;
     std::string unit;
     while (meminfo >> key >> value >> unit) {
+        if (key == "MemAvailable:") report->machine.mem_available_kb = value;
+        if (key == "SwapTotal:") report->machine.swap_total_kb = value;
+        if (key == "SwapFree:") report->machine.swap_free_kb = value;
+        if (key == "AnonHugePages:") report->machine.anon_hugepages_kb = value;
         if (key == "HugePages_Free:") report->machine.hugepages_free = value;
         if (key == "Mlocked:") report->machine.mlocked_kb = value;
     }
@@ -968,6 +1012,24 @@ void vis_doctor_analyze(vis_doctor_report_t* report) {
             "HugePages_Total is 0; VIS-Mem may recommend this later for memory-heavy workloads.",
             {}});
         add_warning_once(&report->runtime_policy.warnings, "no_persistent_hugepages");
+    }
+    if (report->machine.thp_enabled == "always") {
+        report->findings.push_back({"warning", "memory",
+            "Transparent HugePages are set to always.",
+            "THP enabled=" + report->machine.thp_enabled +
+                ", defrag=" + report->machine.thp_defrag,
+            {}});
+        add_warning_once(&report->runtime_policy.warnings, "thp_always_enabled");
+    }
+    if (report->machine.swap_total_kb > 0) {
+        report->findings.push_back({"info", "memory",
+            "Swap is configured on this system.",
+            "SwapTotal=" + std::to_string(report->machine.swap_total_kb) +
+                " kB, SwapFree=" + std::to_string(report->machine.swap_free_kb) +
+                " kB, MemAvailable=" +
+                std::to_string(report->machine.mem_available_kb) + " kB",
+            {}});
+        add_warning_once(&report->runtime_policy.warnings, "swap_configured");
     }
     add_environment_recommendations(report);
 
@@ -1205,6 +1267,13 @@ std::string vis_doctor_to_json(const vis_doctor_report_t* report) {
     out << "      \"smt_active\": " << (report->machine.smt_active ? "true" : "false") << ",\n";
     out << "      \"isolated_cpus\": \"" << json_escape(report->machine.isolated_cpus) << "\",\n";
     out << "      \"nohz_full_cpus\": \"" << json_escape(report->machine.nohz_full_cpus) << "\",\n";
+    out << "      \"thp_enabled\": \"" << json_escape(report->machine.thp_enabled) << "\",\n";
+    out << "      \"thp_defrag\": \"" << json_escape(report->machine.thp_defrag) << "\",\n";
+    out << "      \"khugepaged_defrag\": \"" << json_escape(report->machine.khugepaged_defrag) << "\",\n";
+    out << "      \"mem_available_kb\": " << report->machine.mem_available_kb << ",\n";
+    out << "      \"swap_total_kb\": " << report->machine.swap_total_kb << ",\n";
+    out << "      \"swap_free_kb\": " << report->machine.swap_free_kb << ",\n";
+    out << "      \"anon_hugepages_kb\": " << report->machine.anon_hugepages_kb << ",\n";
     out << "      \"hugepages_total\": " << report->machine.hugepages_total << ",\n";
     out << "      \"hugepages_free\": " << report->machine.hugepages_free << "\n";
     out << "    },\n";
@@ -1388,6 +1457,20 @@ std::string vis_doctor_to_markdown(const vis_doctor_report_t* report) {
     out << "- SMT active: " << (report->machine.smt_active ? "yes" : "no") << "\n";
     out << "- Isolated CPUs: " << (report->machine.isolated_cpus.empty() ? "none" : report->machine.isolated_cpus) << "\n";
     out << "- nohz_full CPUs: " << (report->machine.nohz_full_cpus.empty() ? "none" : report->machine.nohz_full_cpus) << "\n\n";
+    out << "## Memory Evidence\n";
+    out << "- THP enabled: "
+        << (report->machine.thp_enabled.empty() ? "unknown" : report->machine.thp_enabled) << "\n";
+    out << "- THP defrag: "
+        << (report->machine.thp_defrag.empty() ? "unknown" : report->machine.thp_defrag) << "\n";
+    out << "- khugepaged defrag: "
+        << (report->machine.khugepaged_defrag.empty() ? "unknown" : report->machine.khugepaged_defrag) << "\n";
+    out << "- MemAvailable: " << report->machine.mem_available_kb << " kB\n";
+    out << "- SwapTotal: " << report->machine.swap_total_kb << " kB\n";
+    out << "- SwapFree: " << report->machine.swap_free_kb << " kB\n";
+    out << "- HugePages_Total: " << report->machine.hugepages_total << "\n";
+    out << "- HugePages_Free: " << report->machine.hugepages_free << "\n";
+    out << "- AnonHugePages: " << report->machine.anon_hugepages_kb << " kB\n";
+    out << "- Mlocked: " << report->machine.mlocked_kb << " kB\n\n";
     out << "## Environment Evidence\n";
     out << "- Mode: " << report->environment.mode << "\n";
     out << "- Hardware evidence: "

@@ -32,6 +32,10 @@ int main() {
     std::string json = vis_doctor_to_json(&report);
     if (!contains(json, "\"vis_doctor_report\"") ||
         !contains(json, "\"machine\"") ||
+        !contains(json, "\"thp_enabled\"") ||
+        !contains(json, "\"mem_available_kb\"") ||
+        !contains(json, "\"swap_total_kb\"") ||
+        !contains(json, "\"anon_hugepages_kb\"") ||
         !contains(json, "\"environment\"") ||
         !contains(json, "\"evidence_quality\"") ||
         !contains(json, "\"limitations\"") ||
@@ -55,6 +59,9 @@ int main() {
 
     std::string md = vis_doctor_to_markdown(&report);
     if (!contains(md, "# VIS Doctor AI Context") ||
+        !contains(md, "## Memory Evidence") ||
+        !contains(md, "THP enabled") ||
+        !contains(md, "MemAvailable") ||
         !contains(md, "## Environment Evidence") ||
         !contains(md, "Hardware evidence") ||
         !contains(md, "## Sensor Evidence") ||
