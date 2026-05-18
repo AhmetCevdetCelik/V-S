@@ -35,6 +35,13 @@ struct vis_doctor_machine_t {
     bool smt_active;
     std::string isolated_cpus;
     std::string nohz_full_cpus;
+    std::string thp_enabled;
+    std::string thp_defrag;
+    std::string khugepaged_defrag;
+    uint64_t mem_available_kb;
+    uint64_t swap_total_kb;
+    uint64_t swap_free_kb;
+    uint64_t anon_hugepages_kb;
     uint64_t hugepages_total;
     uint64_t hugepages_free;
     uint64_t mlocked_kb;
