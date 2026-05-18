@@ -42,6 +42,7 @@ int main() {
         !contains(json, "\"tracefs\"") ||
         !contains(json, "\"rtla\"") ||
         !contains(json, "\"perf\"") ||
+        !contains(json, "\"capabilities\"") ||
         !contains(json, "\"recommendations\"") ||
         !contains(json, "\"why_it_matters\"") ||
         !contains(json, "\"safe_suggestion\"") ||
@@ -58,6 +59,7 @@ int main() {
         !contains(md, "Hardware evidence") ||
         !contains(md, "## Sensor Evidence") ||
         !contains(md, "passive availability signals") ||
+        !contains(md, "capabilities=") ||
         !contains(md, "tracefs") ||
         !contains(md, "rtla") ||
         !contains(md, "perf") ||

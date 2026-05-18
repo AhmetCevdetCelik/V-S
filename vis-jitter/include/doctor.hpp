@@ -58,6 +58,7 @@ struct vis_doctor_sensor_t {
     bool available;
     std::string quality;
     std::string source;
+    std::vector<std::string> capabilities;
     std::vector<std::string> limitations;
 };
 
